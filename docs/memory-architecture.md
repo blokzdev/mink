@@ -285,11 +285,21 @@ What has landed:
   counts, value-hash LRU, change-timestamp ring, hour-of-day histograms, stable
   anchor and expected-volatile classification, flap detection, and the
   `BaselineSummary` / `rhythmDigest` surfaces.
+- **Lane 4's first persisted node**: the app-access snapshot
+  (`AppAccessSnapshot`), persisted encrypted through `GuardianStore` and diffed
+  across sweeps by `diffAppAccess` to raise capability-gain observations and
+  alerts. The wider app entity graph is still ahead, but the app is now a
+  remembered, diffable entity keyed on package name.
+- **Lane 5's first immutable rule**: a newly installed app holding camera +
+  microphone + location together always raises a CRITICAL alert
+  (`SURVEILLANCE_COMBO` in `AppAccessWatch`). Like every lane-5 rule it is not
+  runtime-writable — no learned state, user feedback, or future refiner may tune,
+  weaken, or disable it.
 
 What is designed but not built:
 
-- **Lanes 3, 4, and 6** — the sweep-page log, the app entity graph, and the
-  context assembler.
+- **Lanes 3 and 6** — the sweep-page log and the context assembler — and the
+  fuller **lane-4 app entity graph** beyond its first persisted node.
 - **The spatial detector**, deferred until place-cluster tokens exist.
 - **The Beta-trust refiner** — the Beta(α, β) feedback-trust thresholds of
   lane 5.
