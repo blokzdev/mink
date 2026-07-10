@@ -25,3 +25,4 @@
 
 # Kotlin compiler session cache
 /.kotlin/
+/fix-workflow.js
