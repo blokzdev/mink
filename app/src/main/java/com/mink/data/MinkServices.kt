@@ -2,6 +2,7 @@ package com.mink.data
 
 import com.mink.companion.Companion
 import com.mink.guardian.Guardian
+import com.mink.monitor.AppAccessMonitor
 import kotlinx.coroutines.CoroutineScope
 
 /**
@@ -9,6 +10,8 @@ import kotlinx.coroutines.CoroutineScope
  * down to the UI. Guardian and companion are nullable so the app degrades
  * gracefully if those subsystems are unavailable (e.g. a device where the
  * native model bridge failed to load, or overlay support is missing).
+ *
+ * [appAccess] is non-null: it needs no model and cannot fail to construct.
  */
 class MinkServices(
     val store: SignalStore,
@@ -16,4 +19,5 @@ class MinkServices(
     val appScope: CoroutineScope,
     val guardian: Guardian?,
     val companion: Companion?,
+    val appAccess: AppAccessMonitor,
 )
