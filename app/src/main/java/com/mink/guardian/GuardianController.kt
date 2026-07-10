@@ -96,6 +96,9 @@ class GuardianController(
 
         // Restore persisted history and settings.
         scope.launch(Dispatchers.IO) {
+            // Re-encrypt anything left as plaintext by a pre-encryption build.
+            runCatching { persistence.migrateLegacyPayloads() }
+
             val obs = runCatching { persistence.loadObservations() }.getOrDefault(emptyList())
             val alertList = runCatching { persistence.loadAlerts() }.getOrDefault(emptyList())
             val chat = runCatching { persistence.loadChatLog() }.getOrDefault(emptyList())
@@ -171,6 +174,12 @@ class GuardianController(
                 val previous = runCatching { persistence.loadSnapshot() }.getOrNull()
                 val baseline = runCatching { persistence.loadBaseline() }.getOrNull()
                 val now = System.currentTimeMillis()
+                val sweepTime = SweepTime(
+                    wallMs = now,
+                    elapsedRealtimeMs = android.os.SystemClock.elapsedRealtime(),
+                    tzOffsetSeconds = java.util.TimeZone.getDefault().getOffset(now) / 1000,
+                )
+                val assessment = assessSweep(baseline?.lastSweepTime, sweepTime)
 
                 val result = analyzer.analyze(previous, snapshot, now, baseline)
                 val ruleAlerts = ruleFindingsToAlerts(store.signals.value)
@@ -182,7 +191,8 @@ class GuardianController(
                 runCatching { persistence.saveSnapshot(snapshot) }
 
                 // Fold this sweep into the learned baseline and publish its digest.
-                val updatedBaseline = (baseline ?: GuardianBaseline.empty(now)).updated(snapshot, now)
+                val updatedBaseline = (baseline ?: GuardianBaseline.empty(now))
+                    .updated(snapshot, now, trust = assessment.trust, sweepTime = sweepTime)
                 runCatching { persistence.saveBaseline(updatedBaseline) }
                 _baseline.value = updatedBaseline.summary(now)
 
