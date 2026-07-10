@@ -57,6 +57,7 @@ fun GuardianScreen(
     services: MinkServices,
     onBack: () -> Unit,
     onOpenChat: () -> Unit,
+    onOpenWatchedApps: () -> Unit,
 ) {
     val guardian = services.guardian
 
@@ -142,6 +143,12 @@ fun GuardianScreen(
                     Button(onClick = onOpenChat, modifier = Modifier.weight(1f)) {
                         Text("Talk to Mink")
                     }
+                }
+            }
+
+            item {
+                FilledTonalButton(onClick = onOpenWatchedApps, modifier = Modifier.fillMaxWidth()) {
+                    Text("Watched apps")
                 }
             }
 

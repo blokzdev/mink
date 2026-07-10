@@ -11,7 +11,7 @@ const val MAX_APP_ACCESS_OBSERVATIONS = 12
 const val MAX_APP_ACCESS_ALERTS = 6
 
 /** The timeline category every app-access observation and alert is filed under. */
-private const val APP_ACCESS_CATEGORY = "app_access"
+const val APP_ACCESS_CATEGORY = "app_access"
 
 /** Observations and alerts produced from one sweep's app-access diff. */
 class AppAccessGuardResult(

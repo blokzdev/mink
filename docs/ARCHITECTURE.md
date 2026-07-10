@@ -149,6 +149,15 @@ so a transient read failure cannot read as "every app was uninstalled". This is
 the first persisted node of the memory architecture's lane-4 app entity graph
 (keyed on package name).
 
+The **Watched apps** screen (`ui/screens/WatchedAppsScreen.kt`) gives these
+findings a distinct home, reached from the guardian dashboard. It filters
+`guardian.observations` to the `app_access` category (`APP_ACCESS_CATEGORY`,
+shared with the guard mapping so the UI needs no magic string) into a
+reverse-chronological timeline of access changes, pairs it with a compact "who
+can reach your phone now" summary drawn from the live `AppAccessReport`, and
+links out to the full App Access screen. It is a filtered view plus summary — no
+new persistence.
+
 ## The companion
 
 `CompanionController` implements `Companion`. It manages the overlay permission,
