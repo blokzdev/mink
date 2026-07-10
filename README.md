@@ -35,8 +35,13 @@ Mink groups every reading into three tiers, reflecting the cost of access:
 ## The Guardian
 
 Mink adds an on-device guardian that can observe, report, discuss, learn your
-patterns, flag anomalies, and evolve with you. It runs **MiniCPM5-1B** locally
-through a `llama.cpp` JNI bridge, with a tier system that adapts to your device:
+patterns, flag anomalies, and evolve with you. Over repeated sweeps it builds a
+private, on-device **baseline** of your device's rhythms — which readings change
+naturally, which have been rock-steady for weeks, and at what hours things
+usually shift — storing only value hashes, never the raw values. That learning
+lets it quiet the routine noise, sharpen the rare alarms, and tell you what it
+has noticed. It runs **MiniCPM5-1B** locally through a `llama.cpp` JNI bridge,
+with a tier system that adapts to your device:
 
 - **Full** (8 GB+ RAM): MiniCPM5-1B Q8_0, hybrid thinking mode.
 - **Lite** (4-6 GB): MiniCPM5-1B Q4_K_M, latency-tuned.

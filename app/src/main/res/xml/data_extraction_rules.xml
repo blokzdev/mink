@@ -1,11 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Preferences DataStore lives at files/datastore/<name>.preferences_pb; the
+     guardian store holds signal snapshots and the learned baseline, which must
+     never leave the device. -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="file" path="models/" />
-        <exclude domain="database" path="guardian.db" />
-        <exclude domain="sharedpref" path="guardian_prefs.xml" />
+        <exclude domain="file" path="datastore/guardian.preferences_pb" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="models/" />
+        <exclude domain="file" path="datastore/guardian.preferences_pb" />
     </device-transfer>
 </data-extraction-rules>

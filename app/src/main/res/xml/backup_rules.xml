@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Mink keeps everything on-device. Exclude the guardian's model cache and
-     its private datastore from cloud backup so nothing sensitive leaves. -->
+     its private datastore (Preferences DataStore writes to
+     files/datastore/<name>.preferences_pb) from cloud backup so nothing
+     sensitive leaves. -->
 <full-backup-content>
     <exclude domain="file" path="models/" />
-    <exclude domain="database" path="guardian.db" />
-    <exclude domain="sharedpref" path="guardian_prefs.xml" />
+    <exclude domain="file" path="datastore/guardian.preferences_pb" />
 </full-backup-content>

@@ -1,6 +1,7 @@
 package com.mink.guardian
 
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
@@ -104,6 +105,14 @@ interface Guardian {
     val alerts: StateFlow<List<GuardianAlert>>
     val observations: StateFlow<List<Observation>>
     val chatLog: StateFlow<List<ChatMessage>>
+
+    /**
+     * A digest of what the guardian has learned about this device's rhythms, or
+     * null until a baseline exists. Defaulted so other [Guardian] implementers
+     * stay source-compatible; [GuardianController] overrides it with a real flow.
+     */
+    val baseline: StateFlow<BaselineSummary?>
+        get() = MutableStateFlow(null)
 
     /** Enable the guardian: pick a tier, prepare the model, begin observing. */
     fun enable()

@@ -24,6 +24,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -63,7 +65,18 @@ class GuardianController(
     private val _chatLog = MutableStateFlow<List<ChatMessage>>(emptyList())
     override val chatLog: StateFlow<List<ChatMessage>> = _chatLog.asStateFlow()
 
+    private val _baseline = MutableStateFlow<BaselineSummary?>(null)
+    override val baseline: StateFlow<BaselineSummary?> = _baseline.asStateFlow()
+
     private var settings = GuardianSettings()
+
+    /**
+     * Serialises sweeps. Four triggers can call [sweepNow] concurrently (the
+     * button, enable, the service loop, and the worker); the baseline is a
+     * read-modify-write accumulator, so overlapping sweeps would silently lose
+     * learned history without this.
+     */
+    private val sweepMutex = Mutex()
 
     init {
         GuardianServiceHost.controller = this
@@ -86,11 +99,15 @@ class GuardianController(
             val obs = runCatching { persistence.loadObservations() }.getOrDefault(emptyList())
             val alertList = runCatching { persistence.loadAlerts() }.getOrDefault(emptyList())
             val chat = runCatching { persistence.loadChatLog() }.getOrDefault(emptyList())
+            val storedBaseline = runCatching { persistence.loadBaseline() }.getOrNull()
             settings = runCatching { persistence.loadSettings() }.getOrDefault(GuardianSettings())
 
             _observations.value = obs
             _alerts.value = alertList
             _chatLog.value = chat
+            if (storedBaseline != null) {
+                _baseline.value = storedBaseline.summary(System.currentTimeMillis())
+            }
             recomputeCounts()
 
             if (settings.enabled) enable()
@@ -141,31 +158,41 @@ class GuardianController(
 
     override fun sweepNow() {
         scope.launch(Dispatchers.Default) {
-            // Refresh the store and wait for the fresh collection to settle so the
-            // first sweep after enable diffs against real data, not an empty or
-            // stale snapshot. collectAll launches per-category work, so we await
-            // the load states settling before reading what is present now.
-            runCatching {
-                store.collectAll()
-                awaitCollectionSettled()
+            sweepMutex.withLock {
+                // Refresh the store and wait for the fresh collection to settle so the
+                // first sweep after enable diffs against real data, not an empty or
+                // stale snapshot. collectAll launches per-category work, so we await
+                // the load states settling before reading what is present now.
+                runCatching {
+                    store.collectAll()
+                    awaitCollectionSettled()
+                }
+                val snapshot = snapshotOf(store.signals.value)
+                val previous = runCatching { persistence.loadSnapshot() }.getOrNull()
+                val baseline = runCatching { persistence.loadBaseline() }.getOrNull()
+                val now = System.currentTimeMillis()
+
+                val result = analyzer.analyze(previous, snapshot, now, baseline)
+                val ruleAlerts = ruleFindingsToAlerts(store.signals.value)
+
+                addObservations(result.observations)
+                val newAlerts = (result.alerts + ruleAlerts)
+                addAlerts(newAlerts)
+
+                runCatching { persistence.saveSnapshot(snapshot) }
+
+                // Fold this sweep into the learned baseline and publish its digest.
+                val updatedBaseline = (baseline ?: GuardianBaseline.empty(now)).updated(snapshot, now)
+                runCatching { persistence.saveBaseline(updatedBaseline) }
+                _baseline.value = updatedBaseline.summary(now)
+
+                _state.value = _state.value.copy(lastSweepEpochMs = System.currentTimeMillis())
+
+                // Surface the loud ones through a notification.
+                newAlerts
+                    .filter { it.level == AlertLevel.WARNING || it.level == AlertLevel.CRITICAL }
+                    .forEach { GuardianService.postAlertNotification(appContext, it) }
             }
-            val snapshot = snapshotOf(store.signals.value)
-            val previous = runCatching { persistence.loadSnapshot() }.getOrNull()
-
-            val result = analyzer.analyze(previous, snapshot, System.currentTimeMillis())
-            val ruleAlerts = ruleFindingsToAlerts(store.signals.value)
-
-            addObservations(result.observations)
-            val newAlerts = (result.alerts + ruleAlerts)
-            addAlerts(newAlerts)
-
-            runCatching { persistence.saveSnapshot(snapshot) }
-            _state.value = _state.value.copy(lastSweepEpochMs = System.currentTimeMillis())
-
-            // Surface the loud ones through a notification.
-            newAlerts
-                .filter { it.level == AlertLevel.WARNING || it.level == AlertLevel.CRITICAL }
-                .forEach { GuardianService.postAlertNotification(appContext, it) }
         }
     }
 
@@ -229,7 +256,7 @@ class GuardianController(
                 }
             }
             val finalParsed = MiniCpmChatFormat.parseReply(raw.toString())
-            val finalContent = finalParsed.content.ifBlank { rules.answer(message, snapshot) }
+            val finalContent = finalParsed.content.ifBlank { rules.answer(message, snapshot, _baseline.value) }
             reply = reply.copy(
                 content = finalContent,
                 thinking = finalParsed.thinking,
@@ -241,7 +268,7 @@ class GuardianController(
                 emit(finalContent)
             }
         } else {
-            val text = rules.answer(message, snapshot)
+            val text = rules.answer(message, snapshot, _baseline.value)
             val words = text.split(" ")
             val acc = StringBuilder()
             for ((index, word) in words.withIndex()) {
@@ -386,14 +413,18 @@ class GuardianController(
     }
 
     /** The guardian's persona. Same calm, on-device voice as the UI copy. */
-    private fun systemPrompt(): String =
-        "You are Mink, a calm privacy guardian that runs entirely on this Android phone. " +
-            "You never send data off the device and you never can. You read what the phone " +
-            "exposes about its owner and you explain it in plain English, second person, " +
-            "present tense. You warn when something is exposed, you suggest what the owner " +
-            "can do, and you stay factual and quiet. Do not use hype or exclamation marks. " +
-            "Keep answers short and concrete. Trackers do not need a name, email, or location " +
-            "to recognise someone; explain how ordinary readings add up to a fingerprint."
+    private fun systemPrompt(): String {
+        val persona =
+            "You are Mink, a calm privacy guardian that runs entirely on this Android phone. " +
+                "You never send data off the device and you never can. You read what the phone " +
+                "exposes about its owner and you explain it in plain English, second person, " +
+                "present tense. You warn when something is exposed, you suggest what the owner " +
+                "can do, and you stay factual and quiet. Do not use hype or exclamation marks. " +
+                "Keep answers short and concrete. Trackers do not need a name, email, or location " +
+                "to recognise someone; explain how ordinary readings add up to a fingerprint."
+        val digest = _baseline.value?.let { rhythmDigest(it) }.orEmpty()
+        return if (digest.isEmpty()) persona else "$persona\n\n$digest"
+    }
 
     companion object {
         const val SWEEP_WORK = "mink-guardian-sweep"

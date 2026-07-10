@@ -34,11 +34,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mink.core.model.SignalCategory
 import com.mink.data.MinkServices
 import com.mink.guardian.AlertLevel
+import com.mink.guardian.BaselineSummary
+import com.mink.guardian.DriftingSignal
 import com.mink.guardian.GuardianAlert
+import com.mink.guardian.MIN_SWEEPS_FOR_LEARNING
 import com.mink.guardian.ModelStatus
 import com.mink.guardian.Observation
+import com.mink.guardian.learningDurationPhrase
 
 /**
  * The guardian dashboard: current tier and model status, an opt-in download,
@@ -82,6 +87,7 @@ fun GuardianScreen(
         val state by guardian.state.collectAsStateWithLifecycle()
         val alerts by guardian.alerts.collectAsStateWithLifecycle()
         val observations by guardian.observations.collectAsStateWithLifecycle()
+        val baseline by guardian.baseline.collectAsStateWithLifecycle()
 
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
@@ -148,6 +154,10 @@ fun GuardianScreen(
                 items(alerts, key = { it.id }) { alert ->
                     AlertCard(alert, onAcknowledge = { guardian.acknowledgeAlert(alert.id) })
                 }
+            }
+
+            baseline?.let { summary ->
+                item { LearningSection(summary) }
             }
 
             item { SectionLabel("Observations", null) }
@@ -261,6 +271,92 @@ private fun ObservationRow(obs: Observation) {
                 color = MaterialTheme.colorScheme.secondary,
             )
             Text(obs.summary, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Composable
+private fun LearningSection(summary: BaselineSummary) {
+    if (!summary.isMature) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+        ) {
+            Text(
+                "Mink is still learning this device — ${summary.sweepCount}/$MIN_SWEEPS_FOR_LEARNING sweeps",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                modifier = Modifier.padding(14.dp),
+            )
+        }
+        return
+    }
+
+    val duration = learningDurationPhrase(summary.learningSinceMs, System.currentTimeMillis())
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 2.dp,
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            Text(
+                "What Mink has learned",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                "watching ${summary.trackedSignals} signals $duration · ${summary.sweepCount} sweeps",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            )
+            Spacer(Modifier.height(14.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                LearningStat("Stable anchors", summary.stableAnchors, Modifier.weight(1f))
+                LearningStat("Naturally changing", summary.expectedVolatile, Modifier.weight(1f))
+                LearningStat("Drifting", summary.driftingSignals.size, Modifier.weight(1f))
+            }
+            summary.driftingSignals.take(3).forEach { signal ->
+                DriftingRow(signal)
+            }
+        }
+    }
+}
+
+@Composable
+private fun LearningStat(label: String, value: Int, modifier: Modifier = Modifier) {
+    Column(modifier = modifier) {
+        Text(
+            value.toString(),
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+        )
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+        )
+    }
+}
+
+@Composable
+private fun DriftingRow(signal: DriftingSignal) {
+    Column(modifier = Modifier.padding(top = 10.dp)) {
+        Text(
+            "${signal.name} — changed ${signal.recentChanges}× this week",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        SignalCategory.fromId(signal.categoryId)?.title?.let { title ->
+            Text(
+                title,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+            )
         }
     }
 }
