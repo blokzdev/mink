@@ -4,7 +4,8 @@ import com.mink.core.model.FingerprintSignal
 import com.mink.core.model.PermissionKind
 import com.mink.core.model.SignalCategory
 import com.mink.core.provider.ProviderContext
-import kotlin.math.roundToLong
+import java.math.BigDecimal
+import java.math.RoundingMode
 
 /**
  * Small helpers shared by the permissioned providers: the granted-state check,
@@ -53,9 +54,12 @@ internal object PermissionedFormat {
      * shows your exact position. Two decimals is roughly a one kilometre grid.
      */
     fun coarseCoordinate(value: Double, decimals: Int = 2): String {
-        var factor = 1.0
-        repeat(decimals) { factor *= 10.0 }
-        val rounded = (value * factor).roundToLong() / factor
+        // Round on the decimal value, not the binary one: BigDecimal.valueOf
+        // uses the canonical string form, so 37.425 rounds half-up to 37.43
+        // instead of being dragged down by floating-point error.
+        val rounded = BigDecimal.valueOf(value)
+            .setScale(decimals.coerceAtLeast(0), RoundingMode.HALF_UP)
+            .toDouble()
         return rounded.toString()
     }
 }

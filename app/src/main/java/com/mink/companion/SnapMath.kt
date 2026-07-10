@@ -44,7 +44,12 @@ object SnapMath {
         val snappedToRight = centre >= screenWidth / 2
         val x = if (snappedToRight) rightX else leftX
 
-        val y = clamp(rawY, margin, maxY - margin)
+        // Clamp the vertical inset bounds into the on-screen range first, the
+        // same way the horizontal bounds are, so a view taller than the screen
+        // settles at 0 rather than a negative (off-screen) position.
+        val topY = clamp(margin, 0, maxY)
+        val bottomY = clamp(maxY - margin, 0, maxY)
+        val y = clamp(rawY, topY, bottomY)
 
         return Placement(x = x, y = y, snappedToRight = snappedToRight)
     }
