@@ -1,0 +1,23 @@
+# Built output
+*.iml
+.gradle/
+/local.properties
+/build/
+/app/build/
+/captures
+.externalNativeBuild/
+.cxx/
+
+# Android Studio / IntelliJ
+.idea/
+*.hprof
+
+# Native / model artifacts (never commit the GGUF model or vendored llama.cpp)
+/app/src/main/cpp/llama/
+*.gguf
+
+# OS
+.DS_Store
+
+# Orchestration scratch (not part of the app)
+/build-workflow.js
