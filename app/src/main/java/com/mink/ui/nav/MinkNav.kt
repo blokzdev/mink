@@ -14,6 +14,7 @@ import com.mink.core.model.PermissionKind
 import com.mink.core.model.SignalCategory
 import com.mink.data.MinkServices
 import com.mink.ui.screens.AboutScreen
+import com.mink.ui.screens.AppAccessScreen
 import com.mink.ui.screens.CategoryDetailScreen
 import com.mink.ui.screens.CompanionScreen
 import com.mink.ui.screens.ExportScreen
@@ -36,11 +37,13 @@ object MinkRoute {
     const val ABOUT = "about"
     const val EXPORT = "export"
     const val PERMISSIONS = "permissions"
+    const val APP_ACCESS = "app_access"
 
     fun category(category: SignalCategory): String = "category/${category.id}"
 
     /** Routes a companion bubble action is allowed to deep-link into. */
-    private val deepLinkable = setOf(HOME, GUARDIAN, COMPANION, SUMMARY, ABOUT, EXPORT, PERMISSIONS)
+    private val deepLinkable =
+        setOf(HOME, GUARDIAN, COMPANION, SUMMARY, ABOUT, EXPORT, PERMISSIONS, APP_ACCESS)
 
     /** Whether [route] is a known, parameterless destination we can navigate to. */
     fun isDeepLinkable(route: String?): Boolean = route != null && route in deepLinkable
@@ -146,6 +149,10 @@ fun MinkNavHost(
 
         composable(MinkRoute.PERMISSIONS) {
             PermissionsScreen(services = services, onBack = { navController.popBackStack() })
+        }
+
+        composable(MinkRoute.APP_ACCESS) {
+            AppAccessScreen(services = services, onBack = { navController.popBackStack() })
         }
     }
 }

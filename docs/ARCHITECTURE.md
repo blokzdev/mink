@@ -120,6 +120,22 @@ The native bridge is optional. `app/build.gradle.kts` only compiles the C++ when
 `src/main/cpp/llama/` is vendored, and `LlamaBridge.isAvailable` reports whether
 `libmink_llm.so` loaded. See [`../app/src/main/cpp/README.md`](../app/src/main/cpp/README.md).
 
+### App access
+
+`com.mink.monitor` builds a read-on-demand, on-device inverted index of *granted*
+runtime permissions: capability → apps that hold it. `AppAccessScanner` reads every
+visible package with `GET_PERMISSIONS` (the same `QUERY_ALL_PACKAGES` surface the
+signals layer uses), maps each dangerous permission to a user-legible
+`PermCapability` (Location, Camera, Microphone, …), and records per app which
+capabilities are granted vs merely declared. `AppAccessReport.from` is pure and
+deterministic; `AppAccessMonitor` exposes the latest report as `StateFlow` and
+refreshes it on demand, guarding against overlapping scans. Nothing is logged or
+persisted — the app list never leaves the phone. This is the first node of the
+memory architecture's lane-4 app entity graph (keyed on package name); guardian
+diffing over it — raising an observation when an app gains a capability or a newly
+installed app arrives with several — is future work, and the stable
+package→capabilities map is shaped so a future snapshot/diff is trivial.
+
 ## The companion
 
 `CompanionController` implements `Companion`. It manages the overlay permission,

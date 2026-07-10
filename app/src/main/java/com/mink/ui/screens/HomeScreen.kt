@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Pets
@@ -108,6 +109,14 @@ fun HomeScreen(
                     title = "Floating companion",
                     subtitle = "Let the 8-bit Mink hover on screen and speak up when it matters.",
                     onClick = { navController.navigate(MinkRoute.COMPANION) },
+                )
+            }
+            item {
+                EntryBanner(
+                    icon = Icons.Filled.Apps,
+                    title = "App access",
+                    subtitle = "See which apps can reach your location, camera, and microphone.",
+                    onClick = { navController.navigate(MinkRoute.APP_ACCESS) },
                 )
             }
 
