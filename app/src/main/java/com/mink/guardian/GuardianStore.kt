@@ -38,8 +38,17 @@ data class GuardianSnapshot(
  * are not serializable and must not be modified, so this store maps them to
  * private DTO mirrors. Every read is exception-safe and returns a sane empty
  * default on any parse failure.
+ *
+ * Every value is encrypted at rest with a Keystore AES-GCM key via [cipher]
+ * (see [KeystorePayloadCipher]). A legacy plaintext value written before
+ * encryption existed is read once transparently and re-encrypted on the next
+ * write. A decryption failure is treated as absent data: the read yields its
+ * empty/null/default just as a parse failure does.
  */
-class GuardianStore(private val context: Context) {
+class GuardianStore(
+    private val context: Context,
+    private val cipher: PayloadCipher = KeystorePayloadCipher(),
+) {
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -73,7 +82,7 @@ class GuardianStore(private val context: Context) {
     // ---- Settings ----
 
     suspend fun loadSettings(): GuardianSettings {
-        val raw = context.guardianDataStore.data.first()[KEY_SETTINGS] ?: return GuardianSettings()
+        val raw = readRaw(KEY_SETTINGS) ?: return GuardianSettings()
         return runCatching {
             val dto = json.decodeFromString(SettingsDto.serializer(), raw)
             dto.toModel()
@@ -84,13 +93,13 @@ class GuardianStore(private val context: Context) {
         val raw = runCatching {
             json.encodeToString(SettingsDto.serializer(), SettingsDto.from(settings))
         }.getOrNull() ?: return
-        context.guardianDataStore.edit { it[KEY_SETTINGS] = raw }
+        writeRaw(KEY_SETTINGS, raw)
     }
 
     // ---- Last snapshot ----
 
     suspend fun loadSnapshot(): GuardianSnapshot? {
-        val raw = context.guardianDataStore.data.first()[KEY_SNAPSHOT] ?: return null
+        val raw = readRaw(KEY_SNAPSHOT) ?: return null
         return runCatching { json.decodeFromString(GuardianSnapshot.serializer(), raw) }.getOrNull()
     }
 
@@ -98,27 +107,37 @@ class GuardianStore(private val context: Context) {
         val raw = runCatching {
             json.encodeToString(GuardianSnapshot.serializer(), snapshot)
         }.getOrNull() ?: return
-        context.guardianDataStore.edit { it[KEY_SNAPSHOT] = raw }
+        writeRaw(KEY_SNAPSHOT, raw)
     }
 
     // ---- Learned baseline ----
 
     /**
-     * The learned historical baseline, or null if none is stored yet or it
-     * fails to parse. [GuardianBaseline] is `@Serializable` directly (a
-     * documented deviation from the private-DTO convention, since it is
-     * data-layer machinery, not a public contract type), so no DTO mirror.
+     * The learned historical baseline, or null if none is stored yet, it fails
+     * to parse, or its [GuardianBaseline.schemaVersion] does not match
+     * [BASELINE_SCHEMA_VERSION]. Discard-on-mismatch is deliberate: a legacy
+     * (unversioned, decodes to 0) or future/downgrade blob may be shaped
+     * differently, and misreading months of learned baseline is worse than
+     * losing it — a discarded baseline simply relearns. A future version adds a
+     * forward migration here instead of discarding.
+     *
+     * [GuardianBaseline] is `@Serializable` directly (a documented deviation
+     * from the private-DTO convention, since it is data-layer machinery, not a
+     * public contract type), so no DTO mirror.
      */
     suspend fun loadBaseline(): GuardianBaseline? {
-        val raw = context.guardianDataStore.data.first()[KEY_BASELINE] ?: return null
-        return runCatching { json.decodeFromString(GuardianBaseline.serializer(), raw) }.getOrNull()
+        val raw = readRaw(KEY_BASELINE) ?: return null
+        val baseline = runCatching {
+            json.decodeFromString(GuardianBaseline.serializer(), raw)
+        }.getOrNull() ?: return null
+        return if (baseline.schemaVersion == BASELINE_SCHEMA_VERSION) baseline else null
     }
 
     suspend fun saveBaseline(b: GuardianBaseline) {
         val raw = runCatching {
             json.encodeToString(GuardianBaseline.serializer(), b)
         }.getOrNull() ?: return
-        context.guardianDataStore.edit { it[KEY_BASELINE] = raw }
+        writeRaw(KEY_BASELINE, raw)
     }
 
     // ---- generic list helpers ----
@@ -127,7 +146,7 @@ class GuardianStore(private val context: Context) {
         key: Preferences.Key<String>,
         serializer: KSerializer<T>,
     ): List<T> {
-        val raw = context.guardianDataStore.data.first()[key] ?: return emptyList()
+        val raw = readRaw(key) ?: return emptyList()
         return runCatching {
             json.decodeFromString(ListSerializer(serializer), raw)
         }.getOrDefault(emptyList())
@@ -141,10 +160,60 @@ class GuardianStore(private val context: Context) {
         val raw = runCatching {
             json.encodeToString(ListSerializer(serializer), list)
         }.getOrNull() ?: return
-        context.guardianDataStore.edit { it[key] = raw }
+        writeRaw(key, raw)
+    }
+
+    // ---- encrypted raw value helpers ----
+
+    /**
+     * Reads the stored value for [key] and decrypts it, or returns null if the
+     * key is absent or [PayloadCipher.decrypt] fails (treated as absent data).
+     * A legacy plaintext value is returned as-is and re-encrypted on next write.
+     */
+    private suspend fun readRaw(key: Preferences.Key<String>): String? {
+        val stored = context.guardianDataStore.data.first()[key] ?: return null
+        return cipher.decrypt(stored)
+    }
+
+    /**
+     * Encrypts [raw] and stores it under [key]. If [PayloadCipher.encrypt]
+     * fails the write is skipped, matching the serialize-failure behavior.
+     */
+    private suspend fun writeRaw(key: Preferences.Key<String>, raw: String) {
+        val stored = cipher.encrypt(raw) ?: return
+        context.guardianDataStore.edit { it[key] = stored }
+    }
+
+    /**
+     * Re-encrypts any value still stored as legacy plaintext, once, at startup.
+     *
+     * Lazy migration on next write is not enough on its own: the snapshot and
+     * baseline are rewritten every sweep, but the chat log is only rewritten
+     * when the user chats, so their plaintext would otherwise linger
+     * indefinitely. Exception-safe; a failure leaves the value as it was.
+     */
+    suspend fun migrateLegacyPayloads() {
+        runCatching {
+            val data = context.guardianDataStore.data.first()
+            // Note: `key to value` would resolve to DataStore's Preferences.Pair
+            // infix, not kotlin.Pair, so construct the pairs explicitly.
+            val reencrypted = ALL_KEYS.mapNotNull { key ->
+                val stored = data[key] ?: return@mapNotNull null
+                if (!isLegacyPayload(stored)) return@mapNotNull null
+                cipher.encrypt(stored)?.let { Pair(key, it) }
+            }
+            if (reencrypted.isEmpty()) return@runCatching
+            context.guardianDataStore.edit { prefs ->
+                reencrypted.forEach { prefs[it.first] = it.second }
+            }
+        }
     }
 
     private companion object {
+        /** Every key holding an encrypted payload, for one-shot legacy migration. */
+        val ALL_KEYS: List<Preferences.Key<String>>
+            get() = listOf(KEY_OBSERVATIONS, KEY_ALERTS, KEY_CHAT, KEY_SETTINGS, KEY_SNAPSHOT, KEY_BASELINE)
+
         val KEY_OBSERVATIONS = stringPreferencesKey("observations")
         val KEY_ALERTS = stringPreferencesKey("alerts")
         val KEY_CHAT = stringPreferencesKey("chat_log")

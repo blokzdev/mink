@@ -109,6 +109,27 @@ class BaselineTest {
     }
 
     @Test
+    fun changesWithinIgnoresFutureDatedEpochs() {
+        val now = 40L * 24 * 60 * 60 * 1000
+        val day = 24L * 60 * 60 * 1000
+        // A change recorded while the wall clock ran ahead. A lower-bound-only
+        // window would count it as "recent" forever; it must be ignored.
+        val s = SignalStats(
+            firstSeenMs = 0L,
+            lastSeenMs = now,
+            sweepsSeen = 30,
+            changeCount = 3,
+            currentValueHash = hashValue("x"),
+            recentChangeEpochs = listOf(now - 2 * day, now + 400 * day),
+            name = "Skewed",
+        )
+        assertEquals(1, s.changesWithin(FLAP_WINDOW_MS, now))
+        // An epoch exactly at nowMs still counts (the current sweep's own change).
+        val atNow = s.copy(recentChangeEpochs = listOf(now))
+        assertEquals(1, atNow.changesWithin(FLAP_WINDOW_MS, now))
+    }
+
+    @Test
     fun summaryDriftingExcludesSignalsWhoseFlapsAreOlderThanWindow() {
         val now = 40L * 24 * 60 * 60 * 1000
         val day = 24L * 60 * 60 * 1000
@@ -305,6 +326,98 @@ class BaselineTest {
         val encoded = json.encodeToString(GuardianBaseline.serializer(), b)
         val decoded = json.decodeFromString(GuardianBaseline.serializer(), encoded)
         assertEquals(b, decoded)
+    }
+
+    // ---- clock-trust gating ----
+
+    @Test
+    fun clockSuspectSweepRecordsChangeButNotHistograms() {
+        val hour13 = 13L * 60 * 60 * 1000 // 13:00 UTC on 1970-01-01
+        var b = GuardianBaseline.empty(0L)
+        // First sighting at 1_000L (hour 0 UTC), trusted by default.
+        b = b.updated(snap(sig("cpu.model", "A")), 1_000L, utc)
+        b = b.updated(snap(sig("cpu.model", "B")), hour13, utc, trust = SweepTrust.CLOCK_SUSPECT)
+
+        val s = b.signals.getValue("cpu.model")
+        // The change itself is fully recorded.
+        assertEquals(2, s.sweepsSeen)
+        assertEquals(1, s.changeCount)
+        assertEquals(hour13, s.lastChangeMs)
+        assertEquals(listOf(hour13), s.recentChangeEpochs)
+        assertEquals(hashValue("B"), s.currentValueHash)
+        // But the temporal model is NOT taught by the lying clock.
+        assertEquals(0, s.changeHourHistogram[13])
+        assertEquals(0, s.changeHourHistogram.sum())
+        assertEquals(0, b.sweepHourHistogram[13])
+        // Sweep 0 (the trusted first sighting) still counted.
+        assertEquals(1, b.sweepHourHistogram[0])
+        assertEquals(1, b.sweepHourHistogram.sum())
+        assertEquals(2, b.sweepCount)
+        assertEquals(1, b.untrustedSweeps)
+    }
+
+    @Test
+    fun trustedSweepAdvancesHistograms() {
+        val hour13 = 13L * 60 * 60 * 1000
+        var b = GuardianBaseline.empty(0L)
+        b = b.updated(snap(sig("cpu.model", "A")), 1_000L, utc)
+        b = b.updated(snap(sig("cpu.model", "B")), hour13, utc, trust = SweepTrust.TRUSTED)
+
+        val s = b.signals.getValue("cpu.model")
+        assertEquals(1, s.changeCount)
+        assertEquals(1, s.changeHourHistogram[13])
+        assertEquals(1, b.sweepHourHistogram[13])
+        assertEquals(0, b.untrustedSweeps)
+    }
+
+    @Test
+    fun untrustedSweepsIncrementOnlyWhenSuspect() {
+        var b = GuardianBaseline.empty(0L)
+        b = b.updated(snap(sig("cpu.model", "A")), 1_000L, utc, trust = SweepTrust.TRUSTED)
+        assertEquals(0, b.untrustedSweeps)
+        b = b.updated(snap(sig("cpu.model", "A")), 2_000L, utc, trust = SweepTrust.CLOCK_SUSPECT)
+        assertEquals(1, b.untrustedSweeps)
+        b = b.updated(snap(sig("cpu.model", "A")), 3_000L, utc, trust = SweepTrust.TRUSTED)
+        assertEquals(1, b.untrustedSweeps) // unchanged by a trusted sweep
+        b = b.updated(snap(sig("cpu.model", "A")), 4_000L, utc, trust = SweepTrust.CLOCK_SUSPECT)
+        assertEquals(2, b.untrustedSweeps)
+    }
+
+    // ---- schema versioning ----
+
+    @Test
+    fun emptyCarriesCurrentSchemaVersion() {
+        assertEquals(BASELINE_SCHEMA_VERSION, GuardianBaseline.empty(0L).schemaVersion)
+    }
+
+    @Test
+    fun updatedUpgradesLegacySchemaVersion() {
+        // A blob written before versioning decodes to schemaVersion 0.
+        val legacy = GuardianBaseline(schemaVersion = 0, createdMs = 0L)
+        assertEquals(0, legacy.schemaVersion)
+        val upgraded = legacy.updated(snap(sig("cpu.model", "A")), 1_000L, utc)
+        assertEquals(BASELINE_SCHEMA_VERSION, upgraded.schemaVersion)
+    }
+
+    // ---- JSON round trip with clock fields populated ----
+
+    @Test
+    fun jsonRoundTripPreservesBaselineWithSweepTime() {
+        val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+        val sweepTime = SweepTime(wallMs = 2_000L, elapsedRealtimeMs = 5_000L, tzOffsetSeconds = 3600)
+        var b = GuardianBaseline.empty(1_000L)
+        b = b.updated(
+            snap(sig("cpu.model", "A"), sig("battery.level", "50")),
+            2_000L,
+            utc,
+            trust = SweepTrust.TRUSTED,
+            sweepTime = sweepTime,
+        )
+        assertEquals(sweepTime, b.lastSweepTime)
+        val encoded = json.encodeToString(GuardianBaseline.serializer(), b)
+        val decoded = json.decodeFromString(GuardianBaseline.serializer(), encoded)
+        assertEquals(b, decoded)
+        assertEquals(sweepTime, decoded.lastSweepTime)
     }
 
     private companion object {

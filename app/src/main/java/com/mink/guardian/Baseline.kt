@@ -5,8 +5,16 @@ import kotlinx.serialization.Serializable
 import java.security.MessageDigest
 import java.time.Instant
 import java.time.ZoneId
+import kotlin.math.abs
 
 // ---- Learning constants ----
+
+/**
+ * Current on-disk schema of [GuardianBaseline]. Bump on any incompatible change
+ * to the persisted shape. A blob written before versioning existed decodes to
+ * [GuardianBaseline.schemaVersion] `== 0` and is deliberately treated as stale.
+ */
+const val BASELINE_SCHEMA_VERSION = 1
 
 /** Most recent distinct value hashes kept per signal (LRU, most-recent last). */
 const val MAX_KNOWN_HASHES = 8
@@ -48,6 +56,96 @@ private const val MS_PER_DAY = 24L * 60 * 60 * 1000
 private const val DIGEST_MAX_CHARS = 500
 private const val NAME_TRUNCATE = 40
 
+// ---- Clock integrity ----
+
+/**
+ * Clock readings captured together at the start of a sweep. Persisted with the
+ * baseline so the next sweep can cross-check the wall clock against the
+ * monotonic clock. Kept pure JVM: the caller supplies the readings.
+ */
+@Serializable
+data class SweepTime(
+    /** `System.currentTimeMillis()` — wall clock, movable by the user/NTP. */
+    val wallMs: Long,
+    /** `SystemClock.elapsedRealtime()` — monotonic, resets to ~0 on boot. */
+    val elapsedRealtimeMs: Long,
+    /** `TimeZone.getDefault().getOffset(wallMs) / 1000` — seconds east of UTC. */
+    val tzOffsetSeconds: Int,
+)
+
+/** Whether a sweep's wall clock can be trusted for time-of-day attribution. */
+enum class SweepTrust { TRUSTED, CLOCK_SUSPECT }
+
+/**
+ * The outcome of cross-checking a sweep's clocks against the previous sweep.
+ * [trust] gates hour-of-day learning; the remaining flags are informational.
+ */
+data class SweepAssessment(
+    val trust: SweepTrust,
+    val rebooted: Boolean,
+    val longGap: Boolean,
+    val timezoneChanged: Boolean,
+)
+
+/** Wall/monotonic disagreement above this is a clock jump, not measurement noise. */
+const val CLOCK_SKEW_TOLERANCE_MS = 5L * 60 * 1000
+
+/** A gap at or beyond this (Doze/idle/reboot) is flagged as a long gap. */
+const val LONG_GAP_MS = 3L * 60 * 60 * 1000
+
+/**
+ * Cross-check the current sweep's clocks against the [previous] sweep to decide
+ * whether the wall clock can be trusted for hour-of-day attribution. Pure and
+ * total — never throws, whatever the inputs.
+ *
+ * The monotonic (`elapsedRealtimeMs`) clock cannot be moved by the user, so wall
+ * time that drifts from it by more than [CLOCK_SKEW_TOLERANCE_MS] signals a jump,
+ * a manual set, or a large NTP correction, and the sweep is marked
+ * [SweepTrust.CLOCK_SUSPECT].
+ *
+ * Reboot caveat: the monotonic clock resets on boot, so `monoDelta < 0` means it
+ * cannot validate the wall clock across that boundary. A reboot is therefore the
+ * one window where clock manipulation is NOT detectable this way; we keep such
+ * sweeps [SweepTrust.TRUSTED] deliberately (post-boot clocks are normally
+ * NTP-synced, and marking every reboot suspect would starve the histograms).
+ *
+ * Slow-drift caveat: the check is per-sweep, against the immediately previous
+ * sweep only, so a clock moved by less than [CLOCK_SKEW_TOLERANCE_MS] between
+ * sweeps drifts without ever being marked suspect. Anchoring to a fixed origin
+ * instead would not help — the anchor's monotonic reading is invalidated by the
+ * next reboot, which an attacker controls. We accept the bound and rely on the
+ * immutable rules, which never consult the learned hour histograms.
+ */
+fun assessSweep(previous: SweepTime?, current: SweepTime): SweepAssessment {
+    if (previous == null) {
+        return SweepAssessment(
+            trust = SweepTrust.TRUSTED,
+            rebooted = false,
+            longGap = false,
+            timezoneChanged = false,
+        )
+    }
+    val monoDelta = current.elapsedRealtimeMs - previous.elapsedRealtimeMs
+    val wallDelta = current.wallMs - previous.wallMs
+    val timezoneChanged = previous.tzOffsetSeconds != current.tzOffsetSeconds
+    return if (monoDelta < 0) {
+        SweepAssessment(
+            trust = SweepTrust.TRUSTED,
+            rebooted = true,
+            longGap = wallDelta >= LONG_GAP_MS,
+            timezoneChanged = timezoneChanged,
+        )
+    } else {
+        val suspect = abs(wallDelta - monoDelta) > CLOCK_SKEW_TOLERANCE_MS
+        SweepAssessment(
+            trust = if (suspect) SweepTrust.CLOCK_SUSPECT else SweepTrust.TRUSTED,
+            rebooted = false,
+            longGap = monoDelta >= LONG_GAP_MS,
+            timezoneChanged = timezoneChanged,
+        )
+    }
+}
+
 /**
  * Per-signal learned history. Stores only value *hashes*, never raw values, so
  * the baseline never becomes a second copy of the fingerprint data.
@@ -68,7 +166,11 @@ data class SignalStats(
     val knownValueHashes: List<String> = emptyList(),
     /** Bounded ring of change timestamps, oldest first, max [MAX_CHANGE_EPOCHS]. */
     val recentChangeEpochs: List<Long> = emptyList(),
-    /** Change events bucketed by local hour-of-day. */
+    /**
+     * Change events bucketed by local hour-of-day. Only advanced by
+     * clock-trusted sweeps (see [SweepTrust]); a sweep whose wall clock is
+     * suspect records the change but does not teach this temporal model.
+     */
     val changeHourHistogram: List<Int> = List(24) { 0 },
     /** Last-known display name (the baseline never stores the raw value). */
     val name: String = "",
@@ -87,16 +189,34 @@ data class SignalStats(
  */
 @Serializable
 data class GuardianBaseline(
+    /**
+     * On-disk schema of this baseline. Defaults to **0** (legacy/unversioned),
+     * deliberately NOT [BASELINE_SCHEMA_VERSION]: a blob written before schema
+     * versioning existed decodes to 0 and must be discarded on load rather than
+     * silently trusted as the current version. [GuardianStore.loadBaseline]
+     * enforces the discard-on-mismatch policy.
+     */
+    val schemaVersion: Int = 0,
     val createdMs: Long,
     val sweepCount: Int = 0,
     val lastSweepMs: Long = 0L,
+    /**
+     * Sweep events bucketed by local hour-of-day. Only advanced by clock-trusted
+     * sweeps (see [SweepTrust]); a sweep whose wall clock is suspect still counts
+     * in [sweepCount] but does not teach this temporal model.
+     */
     val sweepHourHistogram: List<Int> = List(24) { 0 },
     /** key = [FingerprintSignal.id] ("category.key"). */
     val signals: Map<String, SignalStats> = emptyMap(),
+    /** Clocks captured on the most recent sweep, for cross-checking the next one. */
+    val lastSweepTime: SweepTime? = null,
+    /** Count of sweeps rejected as clock-suspect (histograms not advanced). */
+    val untrustedSweeps: Int = 0,
 ) {
     companion object {
-        /** An empty baseline created now. */
-        fun empty(nowMs: Long): GuardianBaseline = GuardianBaseline(createdMs = nowMs)
+        /** An empty baseline created now, stamped with the current schema version. */
+        fun empty(nowMs: Long): GuardianBaseline =
+            GuardianBaseline(schemaVersion = BASELINE_SCHEMA_VERSION, createdMs = nowMs)
     }
 }
 
@@ -135,19 +255,34 @@ fun hashValue(value: String): String {
  * Fold [current] into this baseline, returning the updated copy. Pure: all time
  * comes from [nowMs] and hour attribution from [zone].
  *
- * Semantics: sweep count and hour histogram advance; each signal present in the
- * snapshot is created or updated; on a value-hash change the change count,
- * timestamp ring, hour histogram and known-hash LRU advance. Signals ABSENT from
- * the snapshot are left untouched (a denied/unreadable category must not read as
- * a change). Stale entries are pruned and the map is capped.
+ * Semantics: sweep count advances; each signal present in the snapshot is created
+ * or updated; on a value-hash change the change count, timestamp ring and
+ * known-hash LRU advance. Signals ABSENT from the snapshot are left untouched (a
+ * denied/unreadable category must not read as a change). Stale entries are pruned
+ * and the map is capped. The result is stamped with [BASELINE_SCHEMA_VERSION], so
+ * a legacy-shaped object upgrades on its first write.
+ *
+ * Clock integrity: when [trust] is [SweepTrust.CLOCK_SUSPECT] the hour-of-day
+ * histograms ([sweepHourHistogram] and each signal's `changeHourHistogram`) are
+ * NOT advanced and [untrustedSweeps] is incremented — we refuse to teach the
+ * temporal model from a lying wall clock, but everything else (counts, rings,
+ * LRU, pruning) proceeds so the fact that a change happened is never lost.
+ * [sweepTime] is stored as [lastSweepTime] for the next sweep to cross-check.
  */
 fun GuardianBaseline.updated(
     current: GuardianSnapshot,
     nowMs: Long,
     zone: ZoneId = ZoneId.systemDefault(),
+    trust: SweepTrust = SweepTrust.TRUSTED,
+    sweepTime: SweepTime? = null,
 ): GuardianBaseline {
+    val trusted = trust == SweepTrust.TRUSTED
     val hour = hourOf(nowMs, zone)
-    val newSweepHist = sweepHourHistogram.toMutableList().also { it[hour] = it[hour] + 1 }
+    val newSweepHist = if (trusted) {
+        sweepHourHistogram.toMutableList().also { it[hour] = it[hour] + 1 }
+    } else {
+        sweepHourHistogram
+    }
     val next = signals.toMutableMap()
 
     for ((_, snaps) in current.categories) {
@@ -177,8 +312,11 @@ fun GuardianBaseline.updated(
                     currentValueHash = hash,
                     knownValueHashes = lruAppend(existing.knownValueHashes, hash, MAX_KNOWN_HASHES),
                     recentChangeEpochs = (existing.recentChangeEpochs + nowMs).takeLast(MAX_CHANGE_EPOCHS),
-                    changeHourHistogram = existing.changeHourHistogram.toMutableList()
-                        .also { it[hour] = it[hour] + 1 },
+                    changeHourHistogram = if (trusted) {
+                        existing.changeHourHistogram.toMutableList().also { it[hour] = it[hour] + 1 }
+                    } else {
+                        existing.changeHourHistogram
+                    },
                     name = snap.name,
                 )
             } else {
@@ -203,10 +341,13 @@ fun GuardianBaseline.updated(
     }
 
     return copy(
+        schemaVersion = BASELINE_SCHEMA_VERSION,
         sweepCount = sweepCount + 1,
         lastSweepMs = nowMs,
         sweepHourHistogram = newSweepHist,
         signals = capped,
+        lastSweepTime = sweepTime ?: lastSweepTime,
+        untrustedSweeps = if (trusted) untrustedSweeps else untrustedSweeps + 1,
     )
 }
 
@@ -292,9 +433,16 @@ fun SignalStats.isStableAnchor(nowMs: Long): Boolean =
         sweepsSeen >= STABLE_MIN_SWEEPS &&
         nowMs - firstSeenMs >= STABLE_MIN_AGE_MS
 
-/** How many recorded changes fall within [windowMs] before [nowMs]. */
+/**
+ * How many recorded changes fall within [windowMs] before [nowMs].
+ *
+ * The window is bounded at both ends. A change recorded while the wall clock was
+ * running ahead (see [SweepTrust]) carries a future epoch, and a lower-bound-only
+ * window would count it as "recent" in every future window until the ring evicts
+ * it. Such epochs are ignored instead.
+ */
 fun SignalStats.changesWithin(windowMs: Long, nowMs: Long): Int =
-    recentChangeEpochs.count { it >= nowMs - windowMs }
+    recentChangeEpochs.count { it >= nowMs - windowMs && it <= nowMs }
 
 /**
  * Whether a change at [nowMs] lands on an hour this device has never (nor in the

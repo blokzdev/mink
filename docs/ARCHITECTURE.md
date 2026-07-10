@@ -92,6 +92,30 @@ original two-snapshot analyzer. All of `Baseline.kt` and `GuardianAnalyzer` stay
 free of Android imports and are pure (time and time zone are injected), so the
 learning logic is exhaustively unit-testable on a plain JVM.
 
+Because this persisted history is the most sensitive artifact the app produces,
+the guardian's memory is hardened three ways:
+
+- **Encrypted at rest.** Every value `GuardianStore` writes (observations,
+  alerts, the chat log, settings, the last snapshot, and the baseline) is
+  encrypted with an Android Keystore AES-GCM 256-bit key (`PayloadCipher` /
+  `KeystorePayloadCipher`) before it reaches the Preferences DataStore. The key
+  never leaves the TEE and needs no user authentication, so locked-device
+  background sweeps still work. A legacy plaintext value written before
+  encryption existed is read once transparently and re-encrypted on the next
+  write; a decryption failure is treated as absent data (empty/null/default),
+  exactly like a parse failure.
+- **Schema-versioned baseline.** `GuardianBaseline` carries a `schemaVersion`
+  (`BASELINE_SCHEMA_VERSION`); `loadBaseline()` discards any baseline whose
+  version does not match — including a legacy blob that decodes to `0` — rather
+  than risk misreading months of learned state. Losing a baseline is safe (it
+  relearns); a future version adds a forward migration in that same place.
+- **Clock-trusted hour learning.** Each sweep captures a `SweepTime` (wall clock,
+  monotonic `elapsedRealtime`, and tz offset). `assessSweep` cross-checks the new
+  sweep against the previous one; when the wall clock has moved independently of
+  the monotonic clock the sweep is `CLOCK_SUSPECT`, and the hour-of-day
+  histograms are not advanced — a moved system clock cannot poison the temporal
+  model, though the change itself is still recorded.
+
 The native bridge is optional. `app/build.gradle.kts` only compiles the C++ when
 `src/main/cpp/llama/` is vendored, and `LlamaBridge.isAvailable` reports whether
 `libmink_llm.so` loaded. See [`../app/src/main/cpp/README.md`](../app/src/main/cpp/README.md).
