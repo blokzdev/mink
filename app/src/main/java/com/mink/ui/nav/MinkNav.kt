@@ -24,6 +24,7 @@ import com.mink.ui.screens.HomeScreen
 import com.mink.ui.screens.OnboardingScreen
 import com.mink.ui.screens.PermissionsScreen
 import com.mink.ui.screens.SummaryScreen
+import com.mink.ui.screens.WatchedAppsScreen
 
 /** The navigation destinations of the app, kept in one place. */
 object MinkRoute {
@@ -38,12 +39,13 @@ object MinkRoute {
     const val EXPORT = "export"
     const val PERMISSIONS = "permissions"
     const val APP_ACCESS = "app_access"
+    const val WATCHED_APPS = "watched_apps"
 
     fun category(category: SignalCategory): String = "category/${category.id}"
 
     /** Routes a companion bubble action is allowed to deep-link into. */
     private val deepLinkable =
-        setOf(HOME, GUARDIAN, COMPANION, SUMMARY, ABOUT, EXPORT, PERMISSIONS, APP_ACCESS)
+        setOf(HOME, GUARDIAN, COMPANION, SUMMARY, ABOUT, EXPORT, PERMISSIONS, APP_ACCESS, WATCHED_APPS)
 
     /** Whether [route] is a known, parameterless destination we can navigate to. */
     fun isDeepLinkable(route: String?): Boolean = route != null && route in deepLinkable
@@ -128,6 +130,7 @@ fun MinkNavHost(
                 services = services,
                 onBack = { navController.popBackStack() },
                 onOpenChat = { navController.navigate(MinkRoute.GUARDIAN_CHAT) },
+                onOpenWatchedApps = { navController.navigate(MinkRoute.WATCHED_APPS) },
             )
         }
 
@@ -153,6 +156,14 @@ fun MinkNavHost(
 
         composable(MinkRoute.APP_ACCESS) {
             AppAccessScreen(services = services, onBack = { navController.popBackStack() })
+        }
+
+        composable(MinkRoute.WATCHED_APPS) {
+            WatchedAppsScreen(
+                services = services,
+                onBack = { navController.popBackStack() },
+                onOpenAppAccess = { navController.navigate(MinkRoute.APP_ACCESS) },
+            )
         }
     }
 }
