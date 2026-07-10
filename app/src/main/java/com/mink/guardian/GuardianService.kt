@@ -16,6 +16,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -41,6 +42,8 @@ object GuardianServiceHost {
 class GuardianService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    private var sweepJob: Job? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -68,7 +71,10 @@ class GuardianService : Service() {
     }
 
     private fun startSweepLoop() {
-        scope.launch {
+        // Exactly one sweep loop per service instance, no matter how many times
+        // onStartCommand fires. If a loop is already running, leave it be.
+        if (sweepJob?.isActive == true) return
+        sweepJob = scope.launch {
             while (isActive) {
                 delay(SWEEP_LOOP_MS)
                 runCatching { GuardianServiceHost.controller?.sweepNow() }
@@ -77,6 +83,8 @@ class GuardianService : Service() {
     }
 
     override fun onDestroy() {
+        sweepJob?.cancel()
+        sweepJob = null
         scope.cancel()
         super.onDestroy()
     }

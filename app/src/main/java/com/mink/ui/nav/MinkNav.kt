@@ -3,6 +3,9 @@ package com.mink.ui.nav
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.navigation.NavHostController
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -35,6 +38,34 @@ object MinkRoute {
     const val PERMISSIONS = "permissions"
 
     fun category(category: SignalCategory): String = "category/${category.id}"
+
+    /** Routes a companion bubble action is allowed to deep-link into. */
+    private val deepLinkable = setOf(HOME, GUARDIAN, COMPANION, SUMMARY, ABOUT, EXPORT, PERMISSIONS)
+
+    /** Whether [route] is a known, parameterless destination we can navigate to. */
+    fun isDeepLinkable(route: String?): Boolean = route != null && route in deepLinkable
+}
+
+/**
+ * A tiny process-wide relay for a route the companion overlay asks the app to
+ * open. [com.mink.MainActivity] writes the route from the launch intent; the
+ * navigation host reads it once and navigates, then clears it so a rotation
+ * does not replay the jump. Kept here so neither the Activity nor the overlay
+ * needs a reference to the NavController.
+ */
+object CompanionDeepLink {
+    private val _pendingRoute = MutableStateFlow<String?>(null)
+    val pendingRoute: StateFlow<String?> = _pendingRoute.asStateFlow()
+
+    /** Offer a route to open; ignored unless it is a known deep-link target. */
+    fun offer(route: String?) {
+        if (MinkRoute.isDeepLinkable(route)) _pendingRoute.value = route
+    }
+
+    /** Clear the pending route once it has been navigated to. */
+    fun consume() {
+        _pendingRoute.value = null
+    }
 }
 
 /**

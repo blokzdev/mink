@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.media.ExifInterface
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.provider.MediaStore
 import android.text.format.Formatter
 import com.mink.core.model.DisplayHint
@@ -186,18 +187,33 @@ class PhotosProvider(
         var sampled = 0
         var geotagged = 0
         val makes = mutableListOf<String>()
-        val sortOrder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            "${MediaStore.Images.Media.DATE_TAKEN} DESC LIMIT $SAMPLE_SIZE"
+        val projection = arrayOf(MediaStore.Images.Media._ID)
+        val resultCursor = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // On Android 11+ MediaProvider validates the sort-order string against a
+            // strict grammar, so a "LIMIT n" suffix throws. Ask for the newest images
+            // and cap the row count through the query Bundle instead.
+            val queryArgs = Bundle().apply {
+                putStringArray(
+                    ContentResolver.QUERY_ARG_SORT_COLUMNS,
+                    arrayOf(MediaStore.Images.Media.DATE_TAKEN),
+                )
+                putInt(
+                    ContentResolver.QUERY_ARG_SORT_DIRECTION,
+                    ContentResolver.QUERY_SORT_DIRECTION_DESCENDING,
+                )
+                putInt(ContentResolver.QUERY_ARG_LIMIT, SAMPLE_SIZE)
+            }
+            resolver.query(collection, projection, queryArgs, null)
         } else {
-            "${MediaStore.Images.Media.DATE_TAKEN} DESC"
+            // Pre-R the LIMIT suffix in the sort-order string is still accepted.
+            val sortOrder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                "${MediaStore.Images.Media.DATE_TAKEN} DESC LIMIT $SAMPLE_SIZE"
+            } else {
+                "${MediaStore.Images.Media.DATE_TAKEN} DESC"
+            }
+            resolver.query(collection, projection, null, null, sortOrder)
         }
-        resolver.query(
-            collection,
-            arrayOf(MediaStore.Images.Media._ID),
-            null,
-            null,
-            sortOrder,
-        )?.use { cursor ->
+        resultCursor?.use { cursor ->
             val idCol = cursor.getColumnIndex(MediaStore.Images.Media._ID)
             while (cursor.moveToNext() && sampled < SAMPLE_SIZE) {
                 if (idCol < 0) continue

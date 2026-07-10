@@ -40,18 +40,27 @@ class ModelManager(private val context: Context) {
         GuardianTier.RULES_ONLY -> ""
     }
 
+    /**
+     * Approximate published sizes for MiniCPM5-1B GGUF quants. These are only a
+     * UI progress estimate for the download bar. They are never used as a
+     * completeness gate, because the real file rarely matches the rounded figure.
+     */
     fun expectedSizeBytes(tier: GuardianTier): Long = when (tier) {
-        // Approximate published sizes for MiniCPM5-1B GGUF quants.
         GuardianTier.FULL -> 1_320_000_000L
         GuardianTier.LITE, GuardianTier.MINIMAL -> 820_000_000L
         GuardianTier.RULES_ONLY -> 0L
     }
 
-    /** True when the model file is present and at least its expected size. */
+    /**
+     * True when a fully downloaded, validated model file is present. A completed
+     * download is promoted into place, so the presence of a non-empty file whose
+     * head carries the GGUF magic bytes is the marker of completeness, not any
+     * guessed byte count.
+     */
     fun isDownloaded(tier: GuardianTier): Boolean {
         if (tier == GuardianTier.RULES_ONLY) return false
         val file = modelFile(tier)
-        return file.exists() && file.length() >= expectedSizeBytes(tier)
+        return file.exists() && file.length() > 0L && hasGgufMagic(file)
     }
 
     fun markUnsupported(message: String? = null) {
@@ -121,13 +130,15 @@ class ModelManager(private val context: Context) {
         }
         if (!ok) return false
 
-        // Verify by size, then promote the .part file into place.
+        // Verify integrity by the GGUF magic bytes, then promote the .part file
+        // into place. Completeness against the server total is already enforced
+        // inside fetch, so here we only confirm the file really is a GGUF.
         _state.value = _state.value.copy(status = ModelStatus.VERIFYING)
-        if (part.length() < expected) {
+        if (part.length() <= 0L || !hasGgufMagic(part)) {
             _state.value = GuardianModelState(
                 status = ModelStatus.FAILED,
                 quantName = quantName(tier),
-                message = "Downloaded file is short. Tap to resume.",
+                message = "Downloaded file failed its integrity check. Tap to resume.",
             )
             return false
         }
@@ -161,21 +172,31 @@ class ModelManager(private val context: Context) {
             }
             connection.connect()
             val code = connection.responseCode
+            // A 416 on resume means the server has no bytes past what we already
+            // hold: the .part is already the whole file. Treat it as complete and
+            // let the caller re-validate the GGUF, rather than failing the resume.
+            if (existing > 0 && code == HTTP_RANGE_NOT_SATISFIABLE) {
+                return true
+            }
             if (code != HttpURLConnection.HTTP_OK && code != HttpURLConnection.HTTP_PARTIAL) {
                 throw IllegalStateException("HTTP $code")
             }
             val resuming = code == HttpURLConnection.HTTP_PARTIAL
+            val hasContentLength = connection.contentLengthLong > 0
+            // The completeness target is the server-reported total, never the
+            // hardcoded estimate. Fall back to the estimate only for progress
+            // display when the server does not report a length.
             val reportedTotal = when {
-                connection.contentLengthLong > 0 && resuming -> existing + connection.contentLengthLong
-                connection.contentLengthLong > 0 -> connection.contentLengthLong
+                hasContentLength && resuming -> existing + connection.contentLengthLong
+                hasContentLength -> connection.contentLengthLong
                 else -> expected
             }
 
+            var written = if (resuming) existing else 0L
             RandomAccessFile(part, "rw").use { raf ->
                 if (resuming) raf.seek(existing) else raf.setLength(0)
                 connection.inputStream.use { input ->
                     val buffer = ByteArray(1 shl 16)
-                    var written = if (resuming) existing else 0L
                     while (true) {
                         if (cancelled) return false
                         val read = input.read(buffer)
@@ -190,12 +211,23 @@ class ModelManager(private val context: Context) {
                         )
                     }
                 }
+                // Guard against a stream that ended before the server-reported
+                // total. Leave the .part in place so a later resume can finish it.
+                if (hasContentLength && written < reportedTotal) {
+                    throw IllegalStateException("Incomplete download: $written of $reportedTotal bytes")
+                }
             }
             return true
         } finally {
             connection?.disconnect()
         }
     }
+
+    /**
+     * True when [file]'s first four bytes are the ASCII "GGUF" magic. Reads only
+     * the head, so it is cheap even for a multi-gigabyte model.
+     */
+    private fun hasGgufMagic(file: File): Boolean = fileHasGgufMagic(file)
 
     private fun isMetered(): Boolean = runCatching {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -219,5 +251,32 @@ class ModelManager(private val context: Context) {
         const val TAG = "ModelManager"
         const val HF_BASE =
             "https://huggingface.co/openbmb/MiniCPM5-1B-GGUF/resolve/main"
+
+        // HttpURLConnection has no constant for 416 Range Not Satisfiable.
+        const val HTTP_RANGE_NOT_SATISFIABLE = 416
     }
 }
+
+// The GGUF file format begins with the ASCII bytes "GGUF".
+private val GGUF_MAGIC = byteArrayOf(
+    'G'.code.toByte(), 'G'.code.toByte(), 'U'.code.toByte(), 'F'.code.toByte(),
+)
+
+/**
+ * True when [file] exists and its first four bytes are the ASCII "GGUF" magic.
+ * Reads only the head, so it is cheap even for a multi-gigabyte model. Any I/O
+ * failure is treated as "not a GGUF" rather than propagating.
+ */
+internal fun fileHasGgufMagic(file: File): Boolean = runCatching {
+    if (!file.exists() || file.length() < GGUF_MAGIC.size) return false
+    file.inputStream().use { input ->
+        val head = ByteArray(GGUF_MAGIC.size)
+        var off = 0
+        while (off < head.size) {
+            val read = input.read(head, off, head.size - off)
+            if (read < 0) break
+            off += read
+        }
+        off == head.size && head.contentEquals(GGUF_MAGIC)
+    }
+}.getOrDefault(false)

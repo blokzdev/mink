@@ -7,9 +7,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -19,6 +22,7 @@ import androidx.navigation.compose.rememberNavController
 import com.mink.core.model.PermissionKind
 import com.mink.core.model.SignalCategory
 import com.mink.data.MinkServices
+import com.mink.ui.nav.CompanionDeepLink
 import com.mink.ui.nav.LocalPermissionRequester
 import com.mink.ui.nav.MinkNavHost
 import com.mink.ui.nav.MinkRoute
@@ -42,8 +46,12 @@ fun MinkRoot(services: MinkServices) {
     val navController = rememberNavController()
 
     // The permission kind currently in flight, so the result callback knows
-    // which kind and category to attribute the grant to.
-    var pendingKind by remember { mutableStateOf<PermissionKind?>(null) }
+    // which kind and category to attribute the grant to. Saved (by name) so a
+    // rotation or process death while the OS dialog is up does not lose the
+    // grant's attribution when the ActivityResult is re-delivered.
+    var pendingKind by rememberSaveable(stateSaver = PermissionKindSaver) {
+        mutableStateOf<PermissionKind?>(null)
+    }
 
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -91,9 +99,28 @@ fun MinkRoot(services: MinkServices) {
                     startDestination = start,
                 )
             }
+
+            // A companion bubble action can ask the app to open a screen. Honour
+            // it once the graph exists, then clear it so a rotation does not
+            // replay the jump. Only meaningful past onboarding.
+            val pendingRoute by CompanionDeepLink.pendingRoute.collectAsStateWithLifecycle()
+            LaunchedEffect(pendingRoute, hasSeen) {
+                val route = pendingRoute
+                if (hasSeen && route != null) {
+                    navController.navigate(route) { launchSingleTop = true }
+                    CompanionDeepLink.consume()
+                }
+            }
         }
     }
 }
 
 private fun categoryForKind(kind: PermissionKind): SignalCategory? =
     SignalCategory.entries.firstOrNull { it.permission == kind }
+
+// Stores the in-flight PermissionKind by its name so it survives activity
+// recreation while the OS permission dialog is showing.
+private val PermissionKindSaver: Saver<PermissionKind?, String> = Saver(
+    save = { it?.name },
+    restore = { name -> runCatching { PermissionKind.valueOf(name) }.getOrNull() },
+)

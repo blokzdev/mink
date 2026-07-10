@@ -32,6 +32,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mink.core.model.SignalCategory
@@ -76,9 +79,23 @@ fun CategoryDetailScreen(
         services.permissions.isGranted(it) || statuses[it] == PermissionStatus.GRANTED
     } ?: true
 
-    DisposableEffect(category, granted) {
-        if (granted) vm.start()
-        onDispose { vm.stop() }
+    // Tie collection to the lifecycle so live streams (LOCATION especially) pause when
+    // the app is backgrounded and resume on return, instead of running until the screen
+    // leaves composition.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, category, granted) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> if (granted) vm.start()
+                Lifecycle.Event.ON_STOP -> vm.stop()
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            vm.stop()
+        }
     }
 
     val signals by vm.signals.collectAsStateWithLifecycle()

@@ -182,7 +182,16 @@ class WebViewFingerprintProvider(
                         }
                     }
                 }
-                cont.invokeOnCancellation { runCatching { webView.destroy() } }
+                cont.invokeOnCancellation {
+                    // invokeOnCancellation runs undispatched on the cancelling
+                    // thread, which on the timeout path is not the main thread.
+                    // WebView must be destroyed on the thread it was created on,
+                    // so marshal the teardown back onto the main Looper.
+                    val wv = webView
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        runCatching { wv.destroy() }
+                    }
+                }
                 runCatching {
                     webView.loadDataWithBaseURL(
                         "https://localhost/",

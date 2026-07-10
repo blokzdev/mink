@@ -3,15 +3,22 @@ package com.mink.companion
 import android.content.Context
 import android.os.Build
 import android.provider.Settings
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.preferencesDataStore
 import com.mink.guardian.AlertLevel
 import com.mink.guardian.Guardian
 import com.mink.guardian.GuardianAlert
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -40,10 +47,22 @@ class CompanionController(
     private val announcedAlertIds = mutableSetOf<String>()
     private var clearBubbleJob: Job? = null
 
+    private val appContext = context.applicationContext
+
     init {
         // Treat everything already on the board as seen, so enabling the
         // companion never replays a backlog of old warnings.
         guardian.alerts.value.forEach { announcedAlertIds += it.id }
+
+        // Restore the persisted opt-in so the overlay and the controller agree
+        // after a process-death restart, mirroring how the guardian restores.
+        scope.launch(Dispatchers.IO) {
+            val wasEnabled = runCatching {
+                appContext.companionDataStore.data.first()[KEY_ENABLED]
+            }.getOrNull() ?: false
+            if (wasEnabled && canDrawOverlay()) enable()
+        }
+
         scope.launch {
             guardian.alerts.collect { alerts ->
                 val fresh = alerts.filter {
@@ -70,17 +89,27 @@ class CompanionController(
             return
         }
         _enabled.value = true
+        persistEnabled(true)
         setMood(CompanionMood.IDLE)
         CompanionOverlayService.start(context)
     }
 
     override fun disable() {
         _enabled.value = false
+        persistEnabled(false)
         clearBubbleJob?.cancel()
         _utterance.value = null
         CompanionLink.utterance.value = null
         CompanionLink.bubbleVisible.value = false
         CompanionOverlayService.stop(context)
+    }
+
+    private fun persistEnabled(enabled: Boolean) {
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                appContext.companionDataStore.edit { it[KEY_ENABLED] = enabled }
+            }
+        }
     }
 
     override fun say(utterance: CompanionUtterance) {
@@ -123,5 +152,8 @@ class CompanionController(
 
     private companion object {
         const val BUBBLE_VISIBLE_MS = 9_000L
+        val KEY_ENABLED = booleanPreferencesKey("companion_enabled")
     }
 }
+
+private val Context.companionDataStore: DataStore<Preferences> by preferencesDataStore(name = "companion")

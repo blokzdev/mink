@@ -36,7 +36,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -86,7 +85,6 @@ fun GuardianChatScreen(
         }
 
         val log by guardian.chatLog.collectAsStateWithLifecycle()
-        val scope = rememberCoroutineScope()
         val listState = rememberLazyListState()
         var draft by remember { mutableStateOf("") }
 
@@ -134,8 +132,11 @@ fun GuardianChatScreen(
                             if (text.isNotEmpty()) {
                                 draft = ""
                                 // Collecting the flow drives generation; the log
-                                // updates itself as tokens stream in.
-                                guardian.chat(text).launchIn(scope)
+                                // updates itself as tokens stream in. Launch on the
+                                // process-wide app scope, not the composition scope,
+                                // so navigating back mid-reply does not cancel
+                                // generation and strand a half-streamed message.
+                                guardian.chat(text).launchIn(services.appScope)
                             }
                         },
                     ) {

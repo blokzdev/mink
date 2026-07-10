@@ -8,6 +8,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.mink.core.model.FingerprintSignal
 import com.mink.core.model.SignalCategory
+import com.mink.data.LoadState
 import com.mink.data.SignalStore
 import com.mink.guardian.llm.GenParams
 import com.mink.guardian.llm.LlamaBridge
@@ -15,6 +16,7 @@ import com.mink.guardian.llm.LlmEngine
 import com.mink.guardian.llm.MiniCpmChatFormat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,6 +24,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -138,8 +141,14 @@ class GuardianController(
 
     override fun sweepNow() {
         scope.launch(Dispatchers.Default) {
-            // Refresh the store for the next sweep and read what is present now.
-            runCatching { store.collectAll() }
+            // Refresh the store and wait for the fresh collection to settle so the
+            // first sweep after enable diffs against real data, not an empty or
+            // stale snapshot. collectAll launches per-category work, so we await
+            // the load states settling before reading what is present now.
+            runCatching {
+                store.collectAll()
+                awaitCollectionSettled()
+            }
             val snapshot = snapshotOf(store.signals.value)
             val previous = runCatching { persistence.loadSnapshot() }.getOrNull()
 
@@ -186,7 +195,10 @@ class GuardianController(
             streaming = true,
         )
         val historyBefore = _chatLog.value
-        _chatLog.value = historyBefore + userMsg + reply
+        // Cap the persisted chat log like observations and alerts so it does not
+        // grow without bound. The reply is the last element, so takeLast always
+        // keeps the in-flight message that updateMessage rewrites as it streams.
+        _chatLog.value = (historyBefore + userMsg + reply).takeLast(MAX_HISTORY)
 
         val snapshot = store.signals.value
         val useLlm = capability.tier != GuardianTier.RULES_ONLY && llmEngine.isLoaded
@@ -247,6 +259,22 @@ class GuardianController(
     }.flowOn(Dispatchers.Default)
 
     // ---- internals ----
+
+    /**
+     * Suspend until the store's one-shot collection has settled, i.e. no
+     * category is still Loading, or until a bounded timeout elapses. collect()
+     * flips each permitted category to Loading synchronously before launching
+     * its work, so by the time collectAll() returns the pending categories are
+     * already marked Loading and this poll waits for them to finish. The
+     * timeout keeps a slow or stuck provider from stalling the sweep forever.
+     */
+    private suspend fun awaitCollectionSettled() {
+        withTimeoutOrNull(COLLECT_SETTLE_TIMEOUT_MS) {
+            while (store.loadStates.value.values.any { it is LoadState.Loading }) {
+                delay(COLLECT_SETTLE_POLL_MS)
+            }
+        }
+    }
 
     private fun loadModel() {
         scope.launch(Dispatchers.IO) {
@@ -372,5 +400,7 @@ class GuardianController(
         const val SWEEP_INTERVAL_MINUTES = 60L
         private const val MAX_HISTORY = 100
         private const val MAX_HISTORY_TURNS = 8
+        private const val COLLECT_SETTLE_TIMEOUT_MS = 5000L
+        private const val COLLECT_SETTLE_POLL_MS = 40L
     }
 }

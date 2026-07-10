@@ -2,6 +2,7 @@ package com.mink.signals
 
 import android.content.Context
 import android.graphics.Point
+import android.hardware.display.DisplayManager
 import android.os.Build
 import android.util.DisplayMetrics
 import android.view.Display
@@ -33,7 +34,11 @@ class DisplayProvider(
 
         val display: Display? = runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                appContext.display
+                // Context.getDisplay() throws for a non-visual context such as the
+                // application context, so read the default display from DisplayManager,
+                // which works from any context.
+                val dm = appContext.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
+                dm?.getDisplay(Display.DEFAULT_DISPLAY)
             } else {
                 val wm = appContext.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
                 wm?.defaultDisplay

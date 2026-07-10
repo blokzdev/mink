@@ -75,7 +75,7 @@ class SignalStore(
             }
         }
         setState(category, LoadState.Loading)
-        scope.launch(Dispatchers.Default) {
+        scope.launch(Dispatchers.IO) {
             val result = runCatching { provider.collect() }
             result.onSuccess { list ->
                 putSignals(category, list)
@@ -103,7 +103,7 @@ class SignalStore(
         }
         if (liveJobs[category]?.isActive == true) return
         setState(category, LoadState.Loading)
-        liveJobs[category] = scope.launch(Dispatchers.Default) {
+        liveJobs[category] = scope.launch(Dispatchers.IO) {
             provider.stream().collect { list ->
                 putSignals(category, list)
                 setState(category, LoadState.Loaded)

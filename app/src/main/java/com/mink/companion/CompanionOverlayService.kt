@@ -263,7 +263,10 @@ class CompanionOverlayService : Service() {
 
     companion object {
         private const val CHANNEL_ID = "mink_companion"
-        private const val NOTIFICATION_ID = 4201
+        // Distinct from GuardianService.ONGOING_ID (4201): two foreground
+        // services in the same process must not share a notification slot, or
+        // one silently overwrites and tears down the other's ongoing notice.
+        private const val NOTIFICATION_ID = 4202
         private const val ACTION_STOP = "com.mink.companion.action.STOP"
 
         /** Intent extra carrying the in-app route a bubble action targets. */
