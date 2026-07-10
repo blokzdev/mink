@@ -112,8 +112,12 @@ class RulesEngine {
     fun answer(
         question: String,
         snapshot: Map<SignalCategory, List<FingerprintSignal>>,
+        summary: BaselineSummary? = null,
     ): String {
         val q = question.lowercase()
+        if (mentionsLearning(q)) {
+            learningAnswer(summary)?.let { return it }
+        }
         return when {
             q.contains("location") || q.contains("gps") ->
                 if (exposed(snapshot, SignalCategory.LOCATION)) {
@@ -158,6 +162,45 @@ class RulesEngine {
 
     // ---- helpers ----
 
+    private fun mentionsLearning(q: String): Boolean =
+        q.contains("learn") || q.contains("pattern") || q.contains("trend") ||
+            q.contains("rhythm") || q.contains("baseline")
+
+    /**
+     * Answer a learning question from the [BaselineSummary], or null to fall
+     * through to the general replies (no baseline yet). Uses the wall clock only
+     * to phrase "for D days".
+     */
+    private fun learningAnswer(summary: BaselineSummary?): String? {
+        if (summary == null) return null
+        if (!summary.isMature) {
+            return "I am still learning this device: ${summary.sweepCount} of " +
+                "$MIN_SWEEPS_FOR_LEARNING sweeps so far. Give me a little more time and I can " +
+                "describe its rhythms."
+        }
+        val duration = learningDurationPhrase(summary.learningSinceMs, System.currentTimeMillis())
+        return buildString {
+            append(
+                "I have been watching ${summary.trackedSignals} signals $duration across " +
+                    "${summary.sweepCount} sweeps. ",
+            )
+            append(
+                "${summary.stableAnchors} are stable anchors and ${summary.expectedVolatile} " +
+                    "change naturally. ",
+            )
+            val drifting = summary.driftingSignals.take(3)
+            if (drifting.isNotEmpty()) {
+                append(
+                    "Lately these keep changing: " +
+                        drifting.joinToString(", ") { "${it.name} (${it.recentChanges}x this week)" } +
+                        ".",
+                )
+            } else {
+                append("Nothing is drifting unusually right now.")
+            }
+        }
+    }
+
     private fun exposed(
         snapshot: Map<SignalCategory, List<FingerprintSignal>>,
         category: SignalCategory,
@@ -196,4 +239,5 @@ class RulesEngine {
         Sensitivity.ADVANCED -> AlertLevel.SUGGESTION
         Sensitivity.PASSIVE -> AlertLevel.INFO
     }
+
 }

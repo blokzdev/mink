@@ -67,6 +67,31 @@ Chat is routed through `LlmEngine`, which formats prompts with the MiniCPM5
 available every guardian capability still works through the deterministic rules
 engine, so the feature never hard-fails.
 
+### Learned baseline
+
+Beyond diffing the last two sweeps, the guardian learns the device's rhythms
+over time in a `GuardianBaseline` (`Baseline.kt`), persisted through the same
+`GuardianStore` under a `baseline` key. Per signal it records how often and at
+what local hour the value changes, when it was first and last seen, and a small
+LRU of previously-seen value *hashes* — **never the raw values**, so the
+baseline can never become a second copy of the fingerprint data. All collections
+are bounded (an 8-entry known-hash LRU, a 16-entry change-timestamp ring, a
+24-bucket hour histogram, and a hard cap of 1200 tracked signals with
+least-recently-seen eviction and 30-day pruning).
+
+Once `MIN_SWEEPS_FOR_LEARNING` sweeps exist the analyzer becomes learning-aware:
+naturally-volatile readings (battery, uptime) stop alerting and fold into the
+sweep summary; a change to a long-stable anchor is elevated to a `WARNING` even
+for passive surfaces; reverts to a previously-seen value and changes at an
+unusual hour are annotated; and signals that keep flapping emit an
+`ObservationKind.PATTERN`. A compact `BaselineSummary` drives the dashboard's
+learning card, and a short rhythm digest is injected into the LLM system prompt
+and the rules-engine fallback so Mink can answer "what have you learned about my
+device?". Below the maturity threshold behaviour is byte-identical to the
+original two-snapshot analyzer. All of `Baseline.kt` and `GuardianAnalyzer` stay
+free of Android imports and are pure (time and time zone are injected), so the
+learning logic is exhaustively unit-testable on a plain JVM.
+
 The native bridge is optional. `app/build.gradle.kts` only compiles the C++ when
 `src/main/cpp/llama/` is vendored, and `LlamaBridge.isAvailable` reports whether
 `libmink_llm.so` loaded. See [`../app/src/main/cpp/README.md`](../app/src/main/cpp/README.md).

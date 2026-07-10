@@ -101,6 +101,26 @@ class GuardianStore(private val context: Context) {
         context.guardianDataStore.edit { it[KEY_SNAPSHOT] = raw }
     }
 
+    // ---- Learned baseline ----
+
+    /**
+     * The learned historical baseline, or null if none is stored yet or it
+     * fails to parse. [GuardianBaseline] is `@Serializable` directly (a
+     * documented deviation from the private-DTO convention, since it is
+     * data-layer machinery, not a public contract type), so no DTO mirror.
+     */
+    suspend fun loadBaseline(): GuardianBaseline? {
+        val raw = context.guardianDataStore.data.first()[KEY_BASELINE] ?: return null
+        return runCatching { json.decodeFromString(GuardianBaseline.serializer(), raw) }.getOrNull()
+    }
+
+    suspend fun saveBaseline(b: GuardianBaseline) {
+        val raw = runCatching {
+            json.encodeToString(GuardianBaseline.serializer(), b)
+        }.getOrNull() ?: return
+        context.guardianDataStore.edit { it[KEY_BASELINE] = raw }
+    }
+
     // ---- generic list helpers ----
 
     private suspend fun <T> readList(
@@ -130,6 +150,7 @@ class GuardianStore(private val context: Context) {
         val KEY_CHAT = stringPreferencesKey("chat_log")
         val KEY_SETTINGS = stringPreferencesKey("settings")
         val KEY_SNAPSHOT = stringPreferencesKey("last_snapshot")
+        val KEY_BASELINE = stringPreferencesKey("baseline")
     }
 }
 
