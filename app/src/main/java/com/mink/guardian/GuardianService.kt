@@ -1,5 +1,6 @@
 package com.mink.guardian
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -123,6 +124,7 @@ class GuardianService : Service() {
          * creates the channel first and silently no-ops if the post permission
          * is missing.
          */
+        @SuppressLint("MissingPermission")
         fun postAlertNotification(context: Context, alert: GuardianAlert) {
             ensureChannels(context)
             val notification = NotificationCompat.Builder(context, CHANNEL_ALERTS)

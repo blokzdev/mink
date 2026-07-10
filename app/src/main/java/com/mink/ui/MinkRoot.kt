@@ -9,14 +9,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.rememberNavController
-import kotlinx.coroutines.flow.collect
 import com.mink.core.model.PermissionKind
 import com.mink.core.model.SignalCategory
 import com.mink.data.MinkServices
@@ -73,9 +72,7 @@ fun MinkRoot(services: MinkServices) {
     }
 
     // Null until DataStore resolves, so the start destination is never guessed.
-    val seen by produceState<Boolean?>(initialValue = null, context) {
-        OnboardingStore.seenFlow(context).collect { value = it }
-    }
+    val seen by OnboardingStore.seenFlow(context).collectAsStateWithLifecycle(initialValue = null)
 
     when (val hasSeen = seen) {
         null -> {

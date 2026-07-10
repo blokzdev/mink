@@ -1,5 +1,6 @@
 package com.mink.signals
 
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothClass
 import android.bluetooth.BluetoothDevice
@@ -18,6 +19,10 @@ import com.mink.core.provider.SignalProvider
  * unique to you. The hardware address is redacted by the OS; Mink shows only
  * the metadata it is allowed to read.
  */
+// Every read below is gated by the BLUETOOTH_CONNECT grant at runtime (via the
+// store and the checks here) and wrapped in runCatching; lint cannot trace that
+// indirection through ProviderContext, so the check is suppressed at the class.
+@SuppressLint("MissingPermission")
 class BluetoothProvider(
     private val ctx: ProviderContext,
 ) : SignalProvider {

@@ -1,5 +1,6 @@
 package com.mink.signals
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.location.Location
 import android.location.LocationListener
@@ -22,6 +23,9 @@ import kotlinx.coroutines.flow.callbackFlow
  * Mink coarsens the coordinate it shows you and says so; the raw value never
  * leaves the device. Streams live while the detail screen is open.
  */
+// Location reads are gated by the runtime location grant (checked here and by
+// the store) and wrapped in runCatching; lint cannot trace that indirection.
+@SuppressLint("MissingPermission")
 class LocationProvider(
     private val ctx: ProviderContext,
 ) : LiveSignalProvider {

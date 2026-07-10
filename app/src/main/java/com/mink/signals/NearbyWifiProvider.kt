@@ -1,5 +1,6 @@
 package com.mink.signals
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.net.wifi.ScanResult
 import android.net.wifi.WifiManager
@@ -17,6 +18,9 @@ import com.mink.core.provider.SignalProvider
  * network name and hardware addresses are redacted by the OS; Mink shows the
  * count, signal strength, and a coarse sample only.
  */
+// Wi-Fi scan reads are gated by the NEARBY_WIFI_DEVICES / location grant at
+// runtime and wrapped in runCatching; lint cannot trace that indirection.
+@SuppressLint("MissingPermission")
 class NearbyWifiProvider(
     private val ctx: ProviderContext,
 ) : SignalProvider {
@@ -132,8 +136,12 @@ class NearbyWifiProvider(
         }.getOrNull() ?: return null
         val bands = mutableListOf<String>()
         runCatching { if (wifi.is5GHzBandSupported) bands += "5 GHz" }
-        runCatching { if (wifi.is6GHzBandSupported) bands += "6 GHz" }
-        runCatching { if (wifi.is60GHzBandSupported) bands += "60 GHz" }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            runCatching { if (wifi.is6GHzBandSupported) bands += "6 GHz" }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            runCatching { if (wifi.is60GHzBandSupported) bands += "60 GHz" }
+        }
         // 2.4 GHz is universal on any Wi-Fi radio.
         bands.add(0, "2.4 GHz")
         return bands.joinToString(", ")

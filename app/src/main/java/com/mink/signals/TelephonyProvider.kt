@@ -1,5 +1,6 @@
 package com.mink.signals
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Build
 import android.telephony.TelephonyManager
@@ -18,6 +19,9 @@ import com.mink.core.provider.SignalProvider
  * fingerprint, and it hints at where you are. Mink stays clear of the hardware
  * identifiers the OS blocks, such as the IMEI.
  */
+// isDataEnabled needs a phone-state grant on some OS levels; the call is SDK
+// guarded and wrapped in runCatching, which lint cannot trace here.
+@SuppressLint("MissingPermission")
 class TelephonyProvider(ctx: ProviderContext) : SignalProvider {
 
     private val appContext: Context = ctx.appContext
