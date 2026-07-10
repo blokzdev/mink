@@ -14,6 +14,9 @@ import com.mink.guardian.llm.GenParams
 import com.mink.guardian.llm.LlamaBridge
 import com.mink.guardian.llm.LlmEngine
 import com.mink.guardian.llm.MiniCpmChatFormat
+import com.mink.monitor.AppAccessScanner
+import com.mink.monitor.diffAppAccess
+import com.mink.monitor.toSnapshot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -48,6 +51,13 @@ class GuardianController(
     private val llmEngine = LlmEngine()
     private val rules = RulesEngine()
     private val analyzer = GuardianAnalyzer(rules)
+
+    /**
+     * The guardian's own app-access scanner. Deliberately its own instance and
+     * not shared with MinkServices/AppAccessMonitor: the guardian is constructed
+     * before the UI graph and must stay self-contained.
+     */
+    private val appAccessScanner = AppAccessScanner(appContext)
 
     private val capability = DeviceCapability.detect(appContext, LlamaBridge.isAvailable)
 
@@ -196,10 +206,39 @@ class GuardianController(
                 runCatching { persistence.saveBaseline(updatedBaseline) }
                 _baseline.value = updatedBaseline.summary(now)
 
+                // Watch who can reach what: diff granted capabilities across sweeps.
+                // An empty scan is a failed scan, so it neither diffs nor saves —
+                // it must not wipe the previous state or read as mass uninstall.
+                val appAccessAlerts = runCatching {
+                    val currentAccess = appAccessScanner.scan(now).toSnapshot(now)
+                    if (currentAccess.apps.isEmpty()) {
+                        emptyList()
+                    } else {
+                        val previousAccess = runCatching { persistence.loadAppAccessSnapshot() }.getOrNull()
+                        val findings = diffAppAccess(previousAccess, currentAccess)
+                        // Persist first: the saved snapshot is the commit point.
+                        // Emit findings only once the new state is durable, so a
+                        // failed write cannot re-diff and re-notify the same change
+                        // on every following sweep. If the save fails, the change is
+                        // simply re-detected and emitted once when it next succeeds.
+                        val saved = runCatching { persistence.saveAppAccessSnapshot(currentAccess) }.isSuccess
+                        if (saved && findings.isNotEmpty()) {
+                            val mapped =
+                                appAccessFindingsToGuardian(findings, now) { UUID.randomUUID().toString() }
+                            addObservations(mapped.observations)
+                            addAlerts(mapped.alerts)
+                            mapped.alerts
+                        } else {
+                            emptyList()
+                        }
+                    }
+                }.getOrDefault(emptyList())
+
                 _state.value = _state.value.copy(lastSweepEpochMs = System.currentTimeMillis())
 
-                // Surface the loud ones through a notification.
-                newAlerts
+                // Surface the loud ones through a notification. App-access alerts
+                // join the same merged pass so nothing is notified twice.
+                (newAlerts + appAccessAlerts)
                     .filter { it.level == AlertLevel.WARNING || it.level == AlertLevel.CRITICAL }
                     .forEach { GuardianService.postAlertNotification(appContext, it) }
             }

@@ -2,9 +2,14 @@ package com.mink.guardian
 
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.mink.monitor.APP_ACCESS_SCHEMA_VERSION
+import com.mink.monitor.AppAccessSnapshot
+import com.mink.monitor.AppGrant
+import com.mink.monitor.PermCapability
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -77,5 +82,67 @@ class GuardianStoreMigrationTest {
     fun legacyPayloadDetectionMatchesTheWireFormat() {
         assertTrue(isLegacyPayload("""{"enabled":true}"""))
         assertFalse(isLegacyPayload("ENC1:abcdef"))
+    }
+
+    @Test
+    fun appAccessSnapshotRoundTripsThroughEncryptionAndIsNotPlaintext() = runBlocking {
+        val cipher = KeystorePayloadCipher(alias = "mink.guardian.test." + System.nanoTime())
+        val store = encryptingStore(cipher)
+
+        val snapshot = AppAccessSnapshot(
+            schemaVersion = APP_ACCESS_SCHEMA_VERSION,
+            generatedAtMs = 4_000L,
+            apps = listOf(
+                AppGrant(
+                    packageName = "com.example.alpha",
+                    label = "Alpha",
+                    isSystem = false,
+                    granted = setOf(PermCapability.CAMERA, PermCapability.LOCATION),
+                ),
+                AppGrant(
+                    packageName = "com.example.sys",
+                    label = "Sys",
+                    isSystem = true,
+                    granted = emptySet(),
+                ),
+            ),
+        )
+        store.saveAppAccessSnapshot(snapshot)
+
+        // Readable through the encrypting store...
+        assertEquals(snapshot, store.loadAppAccessSnapshot())
+
+        // ...and actually encrypted: a store with no cipher sees ciphertext it
+        // cannot parse back into a snapshot.
+        assertNull(
+            "legacy read of encrypted snapshot should yield nothing",
+            legacyStore().loadAppAccessSnapshot(),
+        )
+    }
+
+    @Test
+    fun legacyVersionZeroAppAccessSnapshotIsDiscardedOnLoad() = runBlocking {
+        val cipher = KeystorePayloadCipher(alias = "mink.guardian.test." + System.nanoTime())
+
+        // A pre-versioning build persisted a schemaVersion-0 snapshot as plaintext.
+        val legacy = AppAccessSnapshot(
+            schemaVersion = 0,
+            generatedAtMs = 1_000L,
+            apps = listOf(
+                AppGrant(
+                    packageName = "com.example.alpha",
+                    label = "Alpha",
+                    isSystem = false,
+                    granted = setOf(PermCapability.CAMERA),
+                ),
+            ),
+        )
+        legacyStore().saveAppAccessSnapshot(legacy)
+
+        val store = encryptingStore(cipher)
+        store.migrateLegacyPayloads()
+
+        // Re-encrypted by migration, but discarded by the schema-version guard.
+        assertNull("schemaVersion 0 must be discarded on load", store.loadAppAccessSnapshot())
     }
 }

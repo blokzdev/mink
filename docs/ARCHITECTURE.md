@@ -129,12 +129,25 @@ signals layer uses), maps each dangerous permission to a user-legible
 `PermCapability` (Location, Camera, Microphone, …), and records per app which
 capabilities are granted vs merely declared. `AppAccessReport.from` is pure and
 deterministic; `AppAccessMonitor` exposes the latest report as `StateFlow` and
-refreshes it on demand, guarding against overlapping scans. Nothing is logged or
-persisted — the app list never leaves the phone. This is the first node of the
-memory architecture's lane-4 app entity graph (keyed on package name); guardian
-diffing over it — raising an observation when an app gains a capability or a newly
-installed app arrives with several — is future work, and the stable
-package→capabilities map is shaped so a future snapshot/diff is trivial.
+refreshes it on demand, guarding against overlapping scans. The read-on-demand
+report is never logged — the app list stays on the phone.
+
+The guardian now *watches* this map instead of only viewing it. Each sweep
+`AppAccessWatch` reduces the scan to a minimal `AppAccessSnapshot` (package,
+label, system flag, and granted-capability enum names — no versions or install
+times) and `diffAppAccess` compares it to the previous sweep's snapshot.
+`AppAccessGuard` maps the resulting findings to observations and alerts: a user
+app gaining a sensitive capability raises a WARNING ("Chrome gained Location"),
+revocations and system-app churn are observations only, and a newly installed app
+already holding camera + microphone + location trips lane 5's first immutable rule
+— a CRITICAL alert that is never tunable by any refiner. This is a deliberate,
+documented privacy escalation: the snapshot is the first thing App Access
+*persists*, stored through `GuardianStore` (encrypted at rest with a Keystore
+AES-GCM key, excluded from backup) and discarded on schema-version mismatch. An
+empty scan is treated as a failed scan — it never diffs or overwrites good state,
+so a transient read failure cannot read as "every app was uninstalled". This is
+the first persisted node of the memory architecture's lane-4 app entity graph
+(keyed on package name).
 
 ## The companion
 

@@ -6,6 +6,8 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.mink.monitor.APP_ACCESS_SCHEMA_VERSION
+import com.mink.monitor.AppAccessSnapshot
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
@@ -140,6 +142,34 @@ class GuardianStore(
         writeRaw(KEY_BASELINE, raw)
     }
 
+    // ---- App access snapshot ----
+
+    /**
+     * The last persisted app-access snapshot, or null if none is stored yet, it
+     * fails to parse, or its [AppAccessSnapshot.schemaVersion] does not match
+     * [APP_ACCESS_SCHEMA_VERSION]. Discard-on-mismatch mirrors [loadBaseline]: a
+     * legacy (unversioned, decodes to 0) or future/downgrade blob may be shaped
+     * differently, and misreading it is worse than losing it — a discarded
+     * snapshot just means the next sweep records fresh state and diffs nothing.
+     *
+     * [AppAccessSnapshot] is `@Serializable` directly (data-layer machinery, not
+     * a public contract type), so no DTO mirror.
+     */
+    suspend fun loadAppAccessSnapshot(): AppAccessSnapshot? {
+        val raw = readRaw(KEY_APP_ACCESS) ?: return null
+        val snapshot = runCatching {
+            json.decodeFromString(AppAccessSnapshot.serializer(), raw)
+        }.getOrNull() ?: return null
+        return if (snapshot.schemaVersion == APP_ACCESS_SCHEMA_VERSION) snapshot else null
+    }
+
+    suspend fun saveAppAccessSnapshot(snapshot: AppAccessSnapshot) {
+        val raw = runCatching {
+            json.encodeToString(AppAccessSnapshot.serializer(), snapshot)
+        }.getOrNull() ?: return
+        writeRaw(KEY_APP_ACCESS, raw)
+    }
+
     // ---- generic list helpers ----
 
     private suspend fun <T> readList(
@@ -212,7 +242,10 @@ class GuardianStore(
     private companion object {
         /** Every key holding an encrypted payload, for one-shot legacy migration. */
         val ALL_KEYS: List<Preferences.Key<String>>
-            get() = listOf(KEY_OBSERVATIONS, KEY_ALERTS, KEY_CHAT, KEY_SETTINGS, KEY_SNAPSHOT, KEY_BASELINE)
+            get() = listOf(
+                KEY_OBSERVATIONS, KEY_ALERTS, KEY_CHAT, KEY_SETTINGS, KEY_SNAPSHOT,
+                KEY_BASELINE, KEY_APP_ACCESS,
+            )
 
         val KEY_OBSERVATIONS = stringPreferencesKey("observations")
         val KEY_ALERTS = stringPreferencesKey("alerts")
@@ -220,6 +253,7 @@ class GuardianStore(
         val KEY_SETTINGS = stringPreferencesKey("settings")
         val KEY_SNAPSHOT = stringPreferencesKey("last_snapshot")
         val KEY_BASELINE = stringPreferencesKey("baseline")
+        val KEY_APP_ACCESS = stringPreferencesKey("app_access")
     }
 }
 
