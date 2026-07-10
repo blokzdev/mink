@@ -22,3 +22,6 @@
 # Orchestration scratch (not part of the app)
 /build-workflow.js
 /review-workflow.js
+
+# Kotlin compiler session cache
+/.kotlin/
