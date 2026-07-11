@@ -158,6 +158,26 @@ can reach your phone now" summary drawn from the live `AppAccessReport`, and
 links out to the full App Access screen. It is a filtered view plus summary — no
 new persistence.
 
+### Sensor in use
+
+`SensorInUseMonitor` (with the pure `SensorSessionTracker`, both in
+`com.mink.monitor`) is the guardian's second behavioural signal: it notices,
+near real-time, when any app turns the camera or the microphone on, riding two
+public platform callbacks — camera availability and audio-recording
+configuration — that need neither the CAMERA permission nor RECORD_AUDIO. The
+platform anonymises both signals, so Mink only ever knows *that* a sensor was
+in use, never which app used it. When the user grants usage access, the app in
+the foreground at that moment is offered as a best guess — always phrased as
+"likely", never stated as fact, and blind to background services actually
+holding the sensor. Finished sessions become `sensor_use` observations through
+`SensorUseGuard`, rate-capped per sensor per hour so a chatty camera app keeps
+the timeline readable, and two deterministic screen-off rules raise a WARNING:
+camera use while the screen is off, and microphone use while the screen is off
+lasting at least a minute (the duration floor exists because hotword assistants
+legitimately blip the mic). Both thresholds are ordinary tunable rules, not
+lane-5 immutables. The sessions share the Watched apps timeline with the
+app-access findings.
+
 ## The companion
 
 `CompanionController` implements `Companion`. It manages the overlay permission,

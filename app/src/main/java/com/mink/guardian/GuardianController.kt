@@ -15,6 +15,8 @@ import com.mink.guardian.llm.LlamaBridge
 import com.mink.guardian.llm.LlmEngine
 import com.mink.guardian.llm.MiniCpmChatFormat
 import com.mink.monitor.AppAccessScanner
+import com.mink.monitor.SensorInUseMonitor
+import com.mink.monitor.TrackedSession
 import com.mink.monitor.diffAppAccess
 import com.mink.monitor.toSnapshot
 import kotlinx.coroutines.CoroutineScope
@@ -58,6 +60,13 @@ class GuardianController(
      * before the UI graph and must stay self-contained.
      */
     private val appAccessScanner = AppAccessScanner(appContext)
+
+    /**
+     * Near real-time camera/microphone use watch. Sessions arrive on the
+     * monitor's own handler thread and are folded into the timeline through
+     * [onSensorSession]; it runs only between [enable] and [disable].
+     */
+    private val sensorMonitor = SensorInUseMonitor(appContext) { tracked -> onSensorSession(tracked) }
 
     private val capability = DeviceCapability.detect(appContext, LlamaBridge.isAvailable)
 
@@ -142,6 +151,7 @@ class GuardianController(
 
         startService()
         scheduleSweeps()
+        runCatching { sensorMonitor.start() }
         sweepNow()
     }
 
@@ -149,6 +159,7 @@ class GuardianController(
         _state.value = _state.value.copy(enabled = false)
         persistSettings(settings.copy(enabled = false))
         stopService()
+        runCatching { sensorMonitor.stop() }
         runCatching {
             WorkManager.getInstance(appContext).cancelUniqueWork(SWEEP_WORK)
         }
@@ -348,6 +359,32 @@ class GuardianController(
         withTimeoutOrNull(COLLECT_SETTLE_TIMEOUT_MS) {
             while (store.loadStates.value.values.any { it is LoadState.Loading }) {
                 delay(COLLECT_SETTLE_POLL_MS)
+            }
+        }
+    }
+
+    /**
+     * Fold one sensor-use session into the timeline. Takes [sweepMutex]
+     * because addObservations/addAlerts are read-modify-write on StateFlow
+     * and sweeps already serialise through it.
+     */
+    private fun onSensorSession(tracked: TrackedSession) {
+        scope.launch(Dispatchers.Default) {
+            sweepMutex.withLock {
+                runCatching {
+                    val now = System.currentTimeMillis()
+                    val result = sensorSessionToGuardian(tracked, now) { UUID.randomUUID().toString() }
+                    addObservations(listOf(result.observation))
+                    result.alert?.let { alert ->
+                        addAlerts(listOf(alert))
+                        if (alert.level == AlertLevel.WARNING || alert.level == AlertLevel.CRITICAL) {
+                            // Deliberately uncapped and un-cooled-down for now:
+                            // notification frequency policy belongs to the
+                            // alert-hygiene iteration (task E), not here.
+                            GuardianService.postAlertNotification(appContext, alert)
+                        }
+                    }
+                }
             }
         }
     }
