@@ -121,6 +121,34 @@ class GuardianStoreMigrationTest {
     }
 
     @Test
+    fun settingsRoundTripKeepsAlertnessAndMutedSources() = runBlocking {
+        val cipher = KeystorePayloadCipher(alias = "mink.guardian.test." + System.nanoTime())
+        val store = encryptingStore(cipher)
+
+        // Deliberately leaves `enabled` false: enabling the guardian would leak
+        // into the smoke tests, which share this process's DataStore.
+        val configured = GuardianSettings(
+            alertness = Alertness.QUIET,
+            mutedSources = setOf(AlertSource.SENSOR_USE),
+        )
+        store.saveSettings(configured)
+        assertEquals(configured, store.loadSettings())
+
+        // A blob persisted before the alertness fields existed must decode to
+        // the same behavior as today: STANDARD, no mutes. A default-shaped save
+        // stands in for the legacy wire format (the DTO field defaults make the
+        // missing keys safe, and the json config ignores unknown keys). This
+        // also restores the default settings blob for the smoke tests.
+        store.saveSettings(GuardianSettings())
+        val restored = store.loadSettings()
+        assertEquals(Alertness.STANDARD, restored.alertness)
+        assertTrue(
+            "legacy-shaped settings must decode to no mutes",
+            restored.mutedSources.isEmpty(),
+        )
+    }
+
+    @Test
     fun legacyVersionZeroAppAccessSnapshotIsDiscardedOnLoad() = runBlocking {
         val cipher = KeystorePayloadCipher(alias = "mink.guardian.test." + System.nanoTime())
 

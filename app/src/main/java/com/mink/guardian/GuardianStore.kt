@@ -19,6 +19,8 @@ data class GuardianSettings(
     val enabled: Boolean = false,
     val tierOverride: GuardianTier? = null,
     val modelDownloaded: Boolean = false,
+    val alertness: Alertness = Alertness.STANDARD,
+    val mutedSources: Set<AlertSource> = emptySet(),
 )
 
 /** One recorded signal value, used for diffing snapshots across sweeps. */
@@ -291,6 +293,7 @@ private data class AlertDto(
     val categoryId: String?,
     val createdAtEpochMs: Long,
     val acknowledged: Boolean,
+    val fromImmutableRule: Boolean = false,
 ) {
     fun toModel() = GuardianAlert(
         id = id,
@@ -300,11 +303,20 @@ private data class AlertDto(
         categoryId = categoryId,
         createdAtEpochMs = createdAtEpochMs,
         acknowledged = acknowledged,
+        fromImmutableRule = fromImmutableRule,
     )
 
     companion object {
-        fun from(a: GuardianAlert) =
-            AlertDto(a.id, a.level.name, a.title, a.body, a.categoryId, a.createdAtEpochMs, a.acknowledged)
+        fun from(a: GuardianAlert) = AlertDto(
+            id = a.id,
+            level = a.level.name,
+            title = a.title,
+            body = a.body,
+            categoryId = a.categoryId,
+            createdAtEpochMs = a.createdAtEpochMs,
+            acknowledged = a.acknowledged,
+            fromImmutableRule = a.fromImmutableRule,
+        )
     }
 }
 
@@ -335,15 +347,27 @@ private data class SettingsDto(
     val enabled: Boolean,
     val tierOverride: String?,
     val modelDownloaded: Boolean,
+    val alertness: String = Alertness.STANDARD.name,
+    val mutedSources: List<String> = emptyList(),
 ) {
     fun toModel() = GuardianSettings(
         enabled = enabled,
         tierOverride = tierOverride?.let { runCatching { GuardianTier.valueOf(it) }.getOrNull() },
         modelDownloaded = modelDownloaded,
+        alertness = runCatching { Alertness.valueOf(alertness) }.getOrDefault(Alertness.STANDARD),
+        // Unknown entries from a future or corrupted blob are dropped.
+        mutedSources = mutedSources
+            .mapNotNull { runCatching { AlertSource.valueOf(it) }.getOrNull() }
+            .toSet(),
     )
 
     companion object {
-        fun from(s: GuardianSettings) =
-            SettingsDto(s.enabled, s.tierOverride?.name, s.modelDownloaded)
+        fun from(s: GuardianSettings) = SettingsDto(
+            enabled = s.enabled,
+            tierOverride = s.tierOverride?.name,
+            modelDownloaded = s.modelDownloaded,
+            alertness = s.alertness.name,
+            mutedSources = s.mutedSources.map { it.name },
+        )
     }
 }

@@ -19,6 +19,7 @@ import com.mink.monitor.SensorInUseMonitor
 import com.mink.monitor.TrackedSession
 import com.mink.monitor.diffAppAccess
 import com.mink.monitor.toSnapshot
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -53,6 +55,12 @@ class GuardianController(
     private val llmEngine = LlmEngine()
     private val rules = RulesEngine()
     private val analyzer = GuardianAnalyzer(rules)
+
+    /**
+     * Decides which alerts become notifications. Stateful for the cooldown and
+     * single-threaded by contract, so it is only called under [sweepMutex].
+     */
+    private val notificationGate = NotificationGate()
 
     /**
      * The guardian's own app-access scanner. Deliberately its own instance and
@@ -87,7 +95,18 @@ class GuardianController(
     private val _baseline = MutableStateFlow<BaselineSummary?>(null)
     override val baseline: StateFlow<BaselineSummary?> = _baseline.asStateFlow()
 
+    // Written from main-thread setters and IO restore/download paths; volatile
+    // keeps cross-thread reads current (full mutual exclusion is deliberately
+    // not attempted — last-write-wins is acceptable for config).
+    @Volatile
     private var settings = GuardianSettings()
+
+    /**
+     * Completed once the init restore has finished loading persisted settings,
+     * successfully or not. Sweeps wait on it (bounded) so a WorkManager-spawned
+     * process does not run the notification gate against default settings.
+     */
+    private val restored = CompletableDeferred<Unit>()
 
     /**
      * Serialises sweeps. Four triggers can call [sweepNow] concurrently (the
@@ -109,37 +128,58 @@ class GuardianController(
         // Fold the model manager state into the guardian state for the UI.
         scope.launch {
             modelManager.state.collect { model ->
-                _state.value = _state.value.copy(model = model)
+                _state.update { it.copy(model = model) }
             }
         }
 
         // Restore persisted history and settings.
         scope.launch(Dispatchers.IO) {
-            // Re-encrypt anything left as plaintext by a pre-encryption build.
-            runCatching { persistence.migrateLegacyPayloads() }
+            try {
+                // Re-encrypt anything left as plaintext by a pre-encryption build.
+                runCatching { persistence.migrateLegacyPayloads() }
 
-            val obs = runCatching { persistence.loadObservations() }.getOrDefault(emptyList())
-            val alertList = runCatching { persistence.loadAlerts() }.getOrDefault(emptyList())
-            val chat = runCatching { persistence.loadChatLog() }.getOrDefault(emptyList())
-            val storedBaseline = runCatching { persistence.loadBaseline() }.getOrNull()
-            settings = runCatching { persistence.loadSettings() }.getOrDefault(GuardianSettings())
+                val obs = runCatching { persistence.loadObservations() }.getOrDefault(emptyList())
+                val alertList = runCatching { persistence.loadAlerts() }.getOrDefault(emptyList())
+                val chat = runCatching { persistence.loadChatLog() }.getOrDefault(emptyList())
+                val storedBaseline = runCatching { persistence.loadBaseline() }.getOrNull()
+                settings = runCatching { persistence.loadSettings() }.getOrDefault(GuardianSettings())
 
-            _observations.value = obs
-            _alerts.value = alertList
-            _chatLog.value = chat
-            if (storedBaseline != null) {
-                _baseline.value = storedBaseline.summary(System.currentTimeMillis())
+                _observations.value = obs
+                _alerts.value = alertList
+                _chatLog.value = chat
+                _state.update {
+                    it.copy(
+                        alertness = settings.alertness,
+                        mutedSources = settings.mutedSources,
+                    )
+                }
+                if (storedBaseline != null) {
+                    _baseline.value = storedBaseline.summary(System.currentTimeMillis())
+                }
+                recomputeCounts()
+
+                if (settings.enabled) enable()
+            } finally {
+                // Always completes, even if a load throws, so waiting sweeps
+                // never stall on a failed restore.
+                restored.complete(Unit)
             }
-            recomputeCounts()
-
-            if (settings.enabled) enable()
         }
     }
 
     // ---- lifecycle ----
 
     override fun enable() {
-        _state.value = _state.value.copy(enabled = true, tier = capability.tier)
+        // Re-sync the configuration into state alongside the tier so a UI
+        // observing state never sees stale config.
+        _state.update {
+            it.copy(
+                enabled = true,
+                tier = capability.tier,
+                alertness = settings.alertness,
+                mutedSources = settings.mutedSources,
+            )
+        }
         persistSettings(settings.copy(enabled = true))
 
         if (capability.tier != GuardianTier.RULES_ONLY) {
@@ -156,7 +196,7 @@ class GuardianController(
     }
 
     override fun disable() {
-        _state.value = _state.value.copy(enabled = false)
+        _state.update { it.copy(enabled = false) }
         persistSettings(settings.copy(enabled = false))
         stopService()
         runCatching { sensorMonitor.stop() }
@@ -183,6 +223,13 @@ class GuardianController(
     override fun sweepNow() {
         scope.launch(Dispatchers.Default) {
             sweepMutex.withLock {
+                // Wait for the init restore so the notification gate reads the
+                // persisted settings, not defaults. Bounded so a wedged restore
+                // can never stall sweeps; after the timeout the gate runs with
+                // defaults, which only risks one notification filtered by
+                // default policy.
+                withTimeoutOrNull(RESTORE_WAIT_MS) { restored.await() }
+
                 // Refresh the store and wait for the fresh collection to settle so the
                 // first sweep after enable diffs against real data, not an empty or
                 // stale snapshot. collectAll launches per-category work, so we await
@@ -203,9 +250,11 @@ class GuardianController(
                 val assessment = assessSweep(baseline?.lastSweepTime, sweepTime)
 
                 val result = analyzer.analyze(previous, snapshot, now, baseline)
-                val ruleAlerts = ruleFindingsToAlerts(store.signals.value)
+                val ruleFindings = rules.evaluate(store.signals.value)
+                val ruleAlerts = ruleFindingsToAlerts(ruleFindings)
 
                 addObservations(result.observations)
+                realignRuleAlertLevels(ruleFindings)
                 val newAlerts = (result.alerts + ruleAlerts)
                 addAlerts(newAlerts)
 
@@ -245,22 +294,38 @@ class GuardianController(
                     }
                 }.getOrDefault(emptyList())
 
-                _state.value = _state.value.copy(lastSweepEpochMs = System.currentTimeMillis())
+                _state.update { it.copy(lastSweepEpochMs = System.currentTimeMillis()) }
 
-                // Surface the loud ones through a notification. App-access alerts
-                // join the same merged pass so nothing is notified twice.
+                // Surface alerts through notifications as the gate decides. App-access
+                // alerts join the same merged pass so nothing is notified twice. The
+                // gate's cooldown runs on the monotonic clock, so wall-clock jumps
+                // cannot stretch or cancel the suppression window.
                 (newAlerts + appAccessAlerts)
-                    .filter { it.level == AlertLevel.WARNING || it.level == AlertLevel.CRITICAL }
+                    .filter { notificationGate.shouldNotify(it, settings, android.os.SystemClock.elapsedRealtime()) }
                     .forEach { GuardianService.postAlertNotification(appContext, it) }
             }
         }
     }
 
     override fun acknowledgeAlert(id: String) {
-        val updated = _alerts.value.map { if (it.id == id) it.copy(acknowledged = true) else it }
-        _alerts.value = updated
+        var updated: List<GuardianAlert> = emptyList()
+        _alerts.update { current ->
+            current.map { if (it.id == id) it.copy(acknowledged = true) else it }
+                .also { updated = it }
+        }
         recomputeCounts()
         scope.launch(Dispatchers.IO) { runCatching { persistence.saveAlerts(updated) } }
+    }
+
+    override fun setAlertness(alertness: Alertness) {
+        _state.update { it.copy(alertness = alertness) }
+        persistSettings(settings.copy(alertness = alertness))
+    }
+
+    override fun setSourceMuted(source: AlertSource, muted: Boolean) {
+        val next = if (muted) settings.mutedSources + source else settings.mutedSources - source
+        _state.update { it.copy(mutedSources = next) }
+        persistSettings(settings.copy(mutedSources = next))
     }
 
     // ---- chat ----
@@ -285,7 +350,7 @@ class GuardianController(
         // Cap the persisted chat log like observations and alerts so it does not
         // grow without bound. The reply is the last element, so takeLast always
         // keeps the in-flight message that updateMessage rewrites as it streams.
-        _chatLog.value = (historyBefore + userMsg + reply).takeLast(MAX_HISTORY)
+        _chatLog.update { current -> (current + userMsg + reply).takeLast(MAX_HISTORY) }
 
         val snapshot = store.signals.value
         val useLlm = capability.tier != GuardianTier.RULES_ONLY && llmEngine.isLoaded
@@ -377,10 +442,9 @@ class GuardianController(
                     addObservations(listOf(result.observation))
                     result.alert?.let { alert ->
                         addAlerts(listOf(alert))
-                        if (alert.level == AlertLevel.WARNING || alert.level == AlertLevel.CRITICAL) {
-                            // Deliberately uncapped and un-cooled-down for now:
-                            // notification frequency policy belongs to the
-                            // alert-hygiene iteration (task E), not here.
+                        // The gate's cooldown is the frequency policy once deferred from
+                        // here; it runs on the monotonic clock, not the wall clock.
+                        if (notificationGate.shouldNotify(alert, settings, android.os.SystemClock.elapsedRealtime())) {
                             GuardianService.postAlertNotification(appContext, alert)
                         }
                     }
@@ -393,28 +457,30 @@ class GuardianController(
         scope.launch(Dispatchers.IO) {
             val file = modelManager.modelFile(capability.tier)
             if (!file.exists()) return@launch
-            _state.value = _state.value.copy(
-                model = _state.value.model.copy(status = ModelStatus.LOADING),
-            )
+            _state.update {
+                it.copy(model = it.model.copy(status = ModelStatus.LOADING))
+            }
             val ok = runCatching {
                 val nCtx = if (capability.tier == GuardianTier.MINIMAL) 1024 else 2048
                 llmEngine.load(file.absolutePath, nCtx = nCtx)
             }.getOrDefault(false)
-            _state.value = _state.value.copy(
-                model = _state.value.model.copy(
-                    status = if (ok) ModelStatus.LOADED else ModelStatus.FAILED,
-                    message = if (ok) null else "The model could not be loaded on this device.",
-                ),
-            )
+            _state.update {
+                it.copy(
+                    model = it.model.copy(
+                        status = if (ok) ModelStatus.LOADED else ModelStatus.FAILED,
+                        message = if (ok) null else "The model could not be loaded on this device.",
+                    ),
+                )
+            }
         }
     }
 
     private fun ruleFindingsToAlerts(
-        snapshot: Map<SignalCategory, List<FingerprintSignal>>,
+        findings: List<RulesEngine.RuleFinding>,
     ): List<GuardianAlert> {
         val now = System.currentTimeMillis()
         val existingIds = _alerts.value.map { it.id }.toHashSet()
-        return rules.evaluate(snapshot)
+        return findings
             .map { finding ->
                 GuardianAlert(
                     id = "rule.${finding.key}",
@@ -428,6 +494,34 @@ class GuardianController(
             .filter { it.id !in existingIds }
     }
 
+    /**
+     * A rules-engine finding's severity is code, not history: when a release
+     * re-grades a finding, the persisted alert follows it. The stored alert
+     * shares its id with the finding and is skipped by the new-alert filter,
+     * so this is how WARNING -> SUGGESTION demotions reach existing installs.
+     */
+    private fun realignRuleAlertLevels(findings: List<RulesEngine.RuleFinding>) {
+        val levelById = findings.associate { "rule.${it.key}" to it.level }
+        var realigned: List<GuardianAlert>? = null
+        _alerts.update { current ->
+            var changed = false
+            val next = current.map { alert ->
+                val level = levelById[alert.id]
+                if (level != null && level != alert.level) {
+                    changed = true
+                    alert.copy(level = level)
+                } else {
+                    alert
+                }
+            }
+            realigned = if (changed) next else null
+            if (changed) next else current
+        }
+        val merged = realigned ?: return
+        recomputeCounts()
+        scope.launch(Dispatchers.IO) { runCatching { persistence.saveAlerts(merged) } }
+    }
+
     private fun snapshotOf(
         signals: Map<SignalCategory, List<FingerprintSignal>>,
     ): GuardianSnapshot {
@@ -439,32 +533,43 @@ class GuardianController(
 
     private fun addObservations(list: List<Observation>) {
         if (list.isEmpty()) return
-        val merged = (list + _observations.value).take(MAX_HISTORY)
-        _observations.value = merged
+        var merged: List<Observation> = emptyList()
+        _observations.update { current ->
+            ((list + current).take(MAX_HISTORY)).also { merged = it }
+        }
         recomputeCounts()
         scope.launch(Dispatchers.IO) { runCatching { persistence.saveObservations(merged) } }
     }
 
     private fun addAlerts(list: List<GuardianAlert>) {
         if (list.isEmpty()) return
-        val existingIds = _alerts.value.map { it.id }.toHashSet()
-        val fresh = list.filter { it.id !in existingIds }
-        if (fresh.isEmpty()) return
-        val merged = (fresh + _alerts.value).take(MAX_HISTORY)
-        _alerts.value = merged
+        var merged: List<GuardianAlert>? = null
+        _alerts.update { current ->
+            val existingIds = current.map { it.id }.toHashSet()
+            val fresh = list.filter { it.id !in existingIds }
+            if (fresh.isEmpty()) {
+                merged = null
+                current
+            } else {
+                ((fresh + current).take(MAX_HISTORY)).also { merged = it }
+            }
+        }
+        val persisted = merged ?: return
         recomputeCounts()
-        scope.launch(Dispatchers.IO) { runCatching { persistence.saveAlerts(merged) } }
+        scope.launch(Dispatchers.IO) { runCatching { persistence.saveAlerts(persisted) } }
     }
 
     private fun updateMessage(message: ChatMessage) {
-        _chatLog.value = _chatLog.value.map { if (it.id == message.id) message else it }
+        _chatLog.update { log -> log.map { if (it.id == message.id) message else it } }
     }
 
     private fun recomputeCounts() {
-        _state.value = _state.value.copy(
-            observationCount = _observations.value.size,
-            openAlertCount = _alerts.value.count { !it.acknowledged },
-        )
+        _state.update { current ->
+            current.copy(
+                observationCount = _observations.value.size,
+                openAlertCount = _alerts.value.count { !it.acknowledged },
+            )
+        }
     }
 
     private fun persistSettings(next: GuardianSettings) {
@@ -519,5 +624,6 @@ class GuardianController(
         private const val MAX_HISTORY_TURNS = 8
         private const val COLLECT_SETTLE_TIMEOUT_MS = 5000L
         private const val COLLECT_SETTLE_POLL_MS = 40L
+        private const val RESTORE_WAIT_MS = 2000L
     }
 }

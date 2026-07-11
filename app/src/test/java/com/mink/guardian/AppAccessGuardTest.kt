@@ -82,6 +82,9 @@ class AppAccessGuardTest {
         val alert = result.alerts.single()
         assertEquals(AlertLevel.CRITICAL, alert.level)
         assertEquals("New app can see, hear, and locate you", alert.title)
+        // The flag is what exempts the immutable rule from the alertness dial,
+        // mutes, and cooldown (see AlertPolicy.kt).
+        assertTrue(alert.fromImmutableRule)
     }
 
     @Test
@@ -106,6 +109,8 @@ class AppAccessGuardTest {
         val alert = result.alerts.single()
         assertEquals(AlertLevel.WARNING, alert.level)
         assertEquals("New app with access: NewApp", alert.title)
+        // Only the surveillance combo carries the immutable-rule flag.
+        assertFalse(alert.fromImmutableRule)
     }
 
     @Test

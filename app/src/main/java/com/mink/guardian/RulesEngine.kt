@@ -34,8 +34,9 @@ class RulesEngine {
         val findings = mutableListOf<RuleFinding>()
 
         if (exposed(snapshot, SignalCategory.LOCATION)) {
+            // Static exposure is education, not an event; the analyzer raises the change alerts.
             findings += RuleFinding(
-                level = AlertLevel.WARNING,
+                level = AlertLevel.SUGGESTION,
                 title = "Location is exposed",
                 body = "Any app you grant location can read your coordinates. Altitude " +
                     "alone can pin which floor of a building you are on.",

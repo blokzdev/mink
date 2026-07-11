@@ -51,10 +51,18 @@ data class GuardianState(
     val lastSweepEpochMs: Long = 0L,
     val observationCount: Int = 0,
     val openAlertCount: Int = 0,
+    val alertness: Alertness = Alertness.STANDARD,
+    val mutedSources: Set<AlertSource> = emptySet(),
 )
 
 /** Severity of a guardian finding, drives colour and companion urgency. */
 enum class AlertLevel { INFO, SUGGESTION, WARNING, CRITICAL }
+
+/**
+ * How eagerly the guardian interrupts. Configuration for notifications only —
+ * every finding always lands in the timeline regardless.
+ */
+enum class Alertness { QUIET, STANDARD, PARANOID }
 
 /**
  * A single thing the guardian noticed: a new exposure, an anomaly, a pattern,
@@ -68,6 +76,11 @@ data class GuardianAlert(
     val categoryId: String?,
     val createdAtEpochMs: Long,
     val acknowledged: Boolean = false,
+    /**
+     * Set only by lane-5 immutable rules. An alert with this flag always
+     * notifies and no setting can mute it.
+     */
+    val fromImmutableRule: Boolean = false,
 )
 
 /** A recorded observation in the guardian's timeline. */
@@ -134,4 +147,19 @@ interface Guardian {
     fun chat(message: String): Flow<String>
 
     fun acknowledgeAlert(id: String)
+
+    /**
+     * Set how eagerly the guardian notifies. Notifications only; every finding
+     * still lands in the timeline. Defaulted so other [Guardian] implementers
+     * stay source-compatible; [GuardianController] overrides it.
+     */
+    fun setAlertness(alertness: Alertness) {}
+
+    /**
+     * Mute or unmute one family of findings for notifications. Notifications
+     * only; muted findings still land in the timeline. Defaulted so other
+     * [Guardian] implementers stay source-compatible; [GuardianController]
+     * overrides it.
+     */
+    fun setSourceMuted(source: AlertSource, muted: Boolean) {}
 }

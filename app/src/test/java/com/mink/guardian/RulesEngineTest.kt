@@ -26,13 +26,14 @@ class RulesEngineTest {
     }
 
     @Test
-    fun exposedLocationRaisesWarning() {
+    fun exposedLocationIsSuggestion() {
         val snapshot = mapOf(
             SignalCategory.LOCATION to listOf(signal(SignalCategory.LOCATION, "coords", "37.7, -122.4")),
         )
         val findings = rules.evaluate(snapshot)
         val location = findings.first { it.categoryId == SignalCategory.LOCATION.id }
-        assertEquals(AlertLevel.WARNING, location.level)
+        // Static exposure is education, not an event; the analyzer raises the change alerts.
+        assertEquals(AlertLevel.SUGGESTION, location.level)
     }
 
     @Test
@@ -57,11 +58,11 @@ class RulesEngineTest {
             ),
         )
         val findings = rules.evaluate(snapshot)
-        // WARNING (location) must come before INFO (device identity).
+        // SUGGESTION (location) must come before INFO (device identity).
         val levels = findings.map { it.level }
-        val warnIdx = levels.indexOf(AlertLevel.WARNING)
+        val suggestionIdx = levels.indexOf(AlertLevel.SUGGESTION)
         val infoIdx = levels.indexOf(AlertLevel.INFO)
-        assertTrue(warnIdx in 0 until infoIdx)
+        assertTrue(suggestionIdx in 0 until infoIdx)
     }
 
     @Test
