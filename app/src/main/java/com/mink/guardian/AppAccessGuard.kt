@@ -104,7 +104,8 @@ private fun AppAccessFinding.alertOrNull(nowMs: Long, idFactory: () -> String): 
 private fun newAppAlert(app: AppGrant, nowMs: Long, idFactory: () -> String): GuardianAlert? {
     // Immutable rule: a new app holding camera + microphone + location, whether
     // user-installed or system, always raises a CRITICAL alert (see
-    // docs/memory-architecture.md, lane 5). Never tunable.
+    // docs/memory-architecture.md, lane 5). Never tunable. The flag is what
+    // exempts it from the alertness dial, mutes, and cooldown (see AlertPolicy.kt).
     if (app.granted.containsAll(SURVEILLANCE_COMBO)) {
         return GuardianAlert(
             id = idFactory(),
@@ -115,6 +116,7 @@ private fun newAppAlert(app: AppGrant, nowMs: Long, idFactory: () -> String): Gu
                 "install it, it is worth a look.",
             categoryId = APP_ACCESS_CATEGORY,
             createdAtEpochMs = nowMs,
+            fromImmutableRule = true,
         )
     }
     if (app.isSystem) return null

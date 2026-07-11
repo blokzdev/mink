@@ -301,6 +301,10 @@ What has landed:
   unchanged: the screen-off rules are ordinary deterministic rules, deliberately
   not immutable — the microphone rule has a duration floor precisely because
   hotword assistants legitimately blip the mic.
+- **Lane 5's enforcement hook in configuration**: immutable-rule alerts carry
+  `fromImmutableRule` (`GuardianAlert`), and the notification gate
+  (`AlertPolicy.kt`) exempts them from the alertness dial, the per-source
+  mutes, and the repeat cooldown — user configuration can never silence them.
 
 What is designed but not built:
 

@@ -7,6 +7,7 @@ import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -96,12 +97,14 @@ class SmokeTest {
         composeRule.onNodeWithText("Meet Mink, your guardian").performClick()
 
         // Wait for the dashboard's own action, then assert the tier/model card and
-        // the enable switch are present. The switch is never toggled, so nothing
-        // downloads and no service starts.
+        // the enable switch are present. No switch is ever toggled, so nothing
+        // downloads and no service starts. The alertness card adds per-source
+        // mute switches, so the screen legitimately has several toggleables now;
+        // the enable switch is the first in the tree (inside the tier card).
         awaitText("Sweep now")
         composeRule.onNodeWithText("Guardian").assertIsDisplayed()
         composeRule.onNodeWithText("Talk to Mink").assertIsDisplayed()
-        composeRule.onNode(isToggleable()).assertIsDisplayed()
+        composeRule.onAllNodes(isToggleable()).onFirst().assertIsDisplayed()
     }
 
     @Test

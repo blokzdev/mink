@@ -178,6 +178,24 @@ legitimately blip the mic). Both thresholds are ordinary tunable rules, not
 lane-5 immutables. The sessions share the Watched apps timeline with the
 app-access findings.
 
+### Alert hygiene
+
+Notifications are decided by one pure gate (`NotificationGate` in
+`AlertPolicy.kt`), applied by the controller to every alert a sweep or sensor
+session raises. The user sets an **alertness dial** — Quiet notifies only
+CRITICAL findings, Standard adds WARNING, Paranoid adds SUGGESTION — and can
+mute whole `AlertSource` families (access changes, sensor use, signal changes,
+exposure insights). Both affect notifications only: every finding still lands
+in the timeline. A repeated identical non-critical alert (same category and
+title) is cooled down for 30 minutes (`NOTIFICATION_COOLDOWN_MS`, an ordinary
+tunable threshold, not a lane-5 immutable). Static exposure explainers from the
+rules engine (`rule.*` ids) are education rather than events, so the dashboard
+renders them in their own "What your phone exposes" section instead of the
+Alerts list. One thing outranks the whole policy: an alert flagged
+`fromImmutableRule` (today the camera + microphone + location surveillance
+combo) always notifies — no dial setting, mute, or cooldown can silence a
+lane-5 immutable rule.
+
 ## The companion
 
 `CompanionController` implements `Companion`. It manages the overlay permission,
