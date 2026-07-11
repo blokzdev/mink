@@ -295,6 +295,12 @@ What has landed:
   (`SURVEILLANCE_COMBO` in `AppAccessWatch`). Like every lane-5 rule it is not
   runtime-writable — no learned state, user feedback, or future refiner may tune,
   weaken, or disable it.
+- **Lane 4's second behavioural event source**: sensor-in-use sessions
+  (`SensorInUseMonitor` / `SensorSessionTracker`), near real-time camera and
+  microphone use observed through anonymised platform callbacks. Lane 5 is
+  unchanged: the screen-off rules are ordinary deterministic rules, deliberately
+  not immutable — the microphone rule has a duration floor precisely because
+  hotword assistants legitimately blip the mic.
 
 What is designed but not built:
 
