@@ -26,6 +26,7 @@ import com.mink.monitor.dataUseWindow
 import com.mink.monitor.diffAppAccess
 import com.mink.monitor.diffHighRisk
 import com.mink.monitor.toSnapshot
+import com.mink.narrative.SummaryNarration
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -513,6 +514,25 @@ class GuardianController(
                 .generate(prompt, GenParams.noThink(maxTokens = CompanionRemark.REMARK_MAX_TOKENS))
                 .collect { raw.append(it) }
             CompanionRemark.postProcessRemark(raw.toString()).ifBlank { null }
+        }.getOrElse { if (it is CancellationException) throw it else null }
+    }
+
+    /**
+     * Author a grounded plain-language read of the fingerprint summary from a
+     * pre-built [prompt] on the on-device model, or null to fall back to the
+     * deterministic narrative. A leaf with a deterministic fallback: the report is
+     * the grounded backbone shown alongside; the model only writes the prose, and
+     * any failure or empty output degrades to the narrative. No chat-log
+     * persistence — this is a side read, not a conversation turn.
+     */
+    override suspend fun narrate(prompt: String): String? {
+        if (capability.tier == GuardianTier.RULES_ONLY || !llmEngine.isLoaded) return null
+        return runCatching {
+            val raw = StringBuilder()
+            llmEngine
+                .generate(prompt, GenParams.noThink(maxTokens = SummaryNarration.NARRATION_MAX_TOKENS))
+                .collect { raw.append(it) }
+            SummaryNarration.postProcessNarration(raw.toString()).ifBlank { null }
         }.getOrElse { if (it is CancellationException) throw it else null }
     }
 

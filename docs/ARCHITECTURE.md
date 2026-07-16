@@ -335,6 +335,23 @@ the owner card never invents a name a regex did not capture. This closes the las
 real gap against Loupe's narrative. Nothing new is read from the OS, and nothing
 leaves the device.
 
+### Mink's read
+
+The Summary screen can turn its static uniqueness cards into a few sentences of
+plain language, and the same split holds as with the companion: **the model only
+writes the prose.** `SummaryNarration` (`com.mink.narrative`, pure JVM) reduces the
+real report to a compact fact list — the uniqueness score, the top-identifying
+categories, and the already-grounded story sentences, with no raw signal values —
+and wraps it in a calm-guardian prompt that tells the model to use only those facts
+and never invent an app, a value, or a number. `GuardianController.narrate` runs
+the prompt through the on-device engine at a short no-think budget and passes the
+raw text through `postProcessNarration`, which drops any `<think>` span, strips
+markdown and list markers, and hard-caps the result on a sentence boundary. Every
+value the model is shown is real, so there is little for it to fabricate, and the
+deterministic `FingerprintNarrative` stays on screen as the grounded backbone —
+and is the fallback whenever no model is loaded, the call fails, or nothing usable
+comes back.
+
 ## Integration seam
 
 The subsystems are developed against interfaces and wired in exactly one place.

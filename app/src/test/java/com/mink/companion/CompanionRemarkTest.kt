@@ -8,6 +8,7 @@ import com.mink.guardian.HIGH_RISK_CATEGORY
 import com.mink.guardian.SENSOR_USE_CATEGORY
 import com.mink.guardian.llm.MiniCpmChatFormat
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -144,6 +145,25 @@ class CompanionRemarkTest {
         // removed by the scrub before it can leak into the bubble.
         val raw = "Weather <think>keep it short</think>can now reach your camera."
         assertEquals("Weather can now reach your camera.", CompanionRemark.postProcessRemark(raw))
+    }
+
+    @Test
+    fun dropsUnterminatedInlineThinkTail() {
+        // An unterminated inline <think> (the model hit the token cap mid-reasoning,
+        // no closing tag) leaves its reasoning tail behind; it is dropped rather than
+        // leaking into the bubble.
+        val result = CompanionRemark.postProcessRemark("You are recognizable. <think>hmm the score")
+        assertEquals("You are recognizable.", result)
+        assertFalse(result.contains("hmm"))
+    }
+
+    @Test
+    fun stripsLeadingHeadingMarker() {
+        // A leading markdown heading marker is dropped, keeping the words after it.
+        assertEquals(
+            "You stand out.",
+            CompanionRemark.postProcessRemark("# You stand out."),
+        )
     }
 
     @Test
