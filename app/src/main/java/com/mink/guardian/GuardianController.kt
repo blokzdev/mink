@@ -15,9 +15,13 @@ import com.mink.guardian.llm.LlamaBridge
 import com.mink.guardian.llm.LlmEngine
 import com.mink.guardian.llm.MiniCpmChatFormat
 import com.mink.monitor.AppAccessScanner
+import com.mink.monitor.DataUseDecision
 import com.mink.monitor.HighRiskScanner
+import com.mink.monitor.NetworkUsageScanner
 import com.mink.monitor.SensorInUseMonitor
 import com.mink.monitor.TrackedSession
+import com.mink.monitor.analyzeDataUsage
+import com.mink.monitor.dataUseWindow
 import com.mink.monitor.diffAppAccess
 import com.mink.monitor.diffHighRisk
 import com.mink.monitor.toSnapshot
@@ -77,6 +81,13 @@ class GuardianController(
      * graph and must stay self-contained.
      */
     private val highRiskScanner = HighRiskScanner(appContext)
+
+    /**
+     * The guardian's per-app data-use scanner. Its own instance for the same
+     * reason as [appAccessScanner]: the guardian is constructed before the UI
+     * graph and must stay self-contained.
+     */
+    private val networkScanner = NetworkUsageScanner(appContext)
 
     /**
      * Near real-time camera/microphone use watch. Sessions arrive on the
@@ -327,13 +338,54 @@ class GuardianController(
                     }
                 }.getOrDefault(emptyList())
 
+                // Watch how much data each app used since the last check: per-app
+                // volumes over WiFi and cellular, roaming, and background cellular —
+                // never where the data went, which Android does not expose to a normal
+                // app. Data use is a continuous metric, not an event diff, so the check
+                // runs on its own longer cadence (dataUseWindow): a 6h minimum interval
+                // throttles a chronically heavy app that the E notification cooldown
+                // (30 min) cannot, and a gap over the clamp reseeds without alerting.
+                // Persist-then-emit: the cursor is saved before emitting, so a failed
+                // emit re-detects next window rather than re-alerting the same usage, and
+                // a first run with no prior cursor just seeds it (no alert on pre-existing
+                // usage, matching the App Access baseline rule).
+                val dataUseAlerts = runCatching {
+                    if (!NetworkUsageScanner.hasUsageAccess(appContext)) {
+                        emptyList()
+                    } else {
+                        val last = runCatching { persistence.loadLastNetworkCheckMs() }.getOrNull()
+                        when (val decision = dataUseWindow(last, now)) {
+                            is DataUseDecision.Seed -> {
+                                runCatching { persistence.saveLastNetworkCheckMs(decision.cursorMs) }
+                                emptyList()
+                            }
+                            DataUseDecision.Skip -> emptyList()
+                            is DataUseDecision.Analyze -> {
+                                val report = networkScanner.scan(decision.startMs, decision.endMs)
+                                val findings = analyzeDataUsage(report.apps)
+                                val saved =
+                                    runCatching { persistence.saveLastNetworkCheckMs(decision.endMs) }.isSuccess
+                                if (saved && findings.isNotEmpty()) {
+                                    val mapped =
+                                        dataUsageFindingsToGuardian(findings, now) { UUID.randomUUID().toString() }
+                                    addObservations(mapped.observations)
+                                    addAlerts(mapped.alerts)
+                                    mapped.alerts
+                                } else {
+                                    emptyList()
+                                }
+                            }
+                        }
+                    }
+                }.getOrDefault(emptyList())
+
                 _state.update { it.copy(lastSweepEpochMs = System.currentTimeMillis()) }
 
-                // Surface alerts through notifications as the gate decides. App-access
-                // and high-risk alerts join the same merged pass so nothing is notified
-                // twice. The gate's cooldown runs on the monotonic clock, so wall-clock
-                // jumps cannot stretch or cancel the suppression window.
-                (newAlerts + appAccessAlerts + highRiskAlerts)
+                // Surface alerts through notifications as the gate decides. App-access,
+                // high-risk, and data-use alerts join the same merged pass so nothing is
+                // notified twice. The gate's cooldown runs on the monotonic clock, so
+                // wall-clock jumps cannot stretch or cancel the suppression window.
+                (newAlerts + appAccessAlerts + highRiskAlerts + dataUseAlerts)
                     .filter { notificationGate.shouldNotify(it, settings, android.os.SystemClock.elapsedRealtime()) }
                     .forEach { GuardianService.postAlertNotification(appContext, it) }
             }
