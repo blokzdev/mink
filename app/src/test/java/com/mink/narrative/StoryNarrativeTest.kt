@@ -520,6 +520,193 @@ class StoryNarrativeTest {
         assertNull(cardOf(cards, "apps"))
     }
 
+    // ---- languages ----
+
+    @Test
+    fun languagesFiresWhenTwoDistinctLanguagesArePreferred() {
+        val cards = StoryNarrative.build(
+            snapshot(
+                sig(
+                    SignalCategory.LOCALE,
+                    "preferredLocales",
+                    entries = listOf(SignalEntry("en-US", ""), SignalEntry("fr-FR", "")),
+                ),
+            ),
+            emptyContext,
+        )
+
+        val languages = cardOf(cards, "languages")!!
+        assertEquals("You use more than one language", languages.title)
+        assertEquals(
+            "Your preferred languages are English and French — that ordered set is often unique to you.",
+            languages.body,
+        )
+        assertEquals("Read from your preferred languages.", languages.basis)
+    }
+
+    @Test
+    fun languagesIsNullWithOnlyOneLanguage() {
+        val cards = StoryNarrative.build(
+            snapshot(
+                sig(
+                    SignalCategory.LOCALE,
+                    "preferredLocales",
+                    entries = listOf(SignalEntry("en-US", "")),
+                ),
+            ),
+            emptyContext,
+        )
+
+        assertNull(cardOf(cards, "languages"))
+    }
+
+    @Test
+    fun languagesIsNullWhenLocalesShareAPrimarySubtag() {
+        // en-US and en-GB collapse onto the single primary subtag "en".
+        val cards = StoryNarrative.build(
+            snapshot(
+                sig(
+                    SignalCategory.LOCALE,
+                    "preferredLocales",
+                    entries = listOf(SignalEntry("en-US", ""), SignalEntry("en-GB", "")),
+                ),
+            ),
+            emptyContext,
+        )
+
+        assertNull(cardOf(cards, "languages"))
+    }
+
+    // ---- accessibility ----
+
+    @Test
+    fun accessibilityFiresAndListsTheEnabledFacets() {
+        val cards = StoryNarrative.build(
+            snapshot(
+                sig(SignalCategory.ACCESSIBILITY, "touchExploration", value = "true"),
+                sig(
+                    SignalCategory.ACCESSIBILITY,
+                    "displayFlags",
+                    entries = listOf(
+                        SignalEntry("High contrast text", "true"),
+                        SignalEntry("Color inversion", "true"),
+                    ),
+                ),
+            ),
+            emptyContext,
+        )
+
+        val accessibility = cardOf(cards, "accessibility")!!
+        assertEquals("You have accessibility settings on", accessibility.title)
+        assertEquals(
+            "Mink can see you use explore by touch, high-contrast text, and colour inversion. Any app " +
+                "can read these flags with no prompt, and each one you change is a distinguishing detail.",
+            accessibility.body,
+        )
+        assertEquals("Read from accessibility flags any app can check.", accessibility.basis)
+    }
+
+    @Test
+    fun accessibilityFiresOnACustomAnimationScaleAndFontScale() {
+        val cards = StoryNarrative.build(
+            snapshot(
+                sig(
+                    SignalCategory.ACCESSIBILITY,
+                    "animationScales",
+                    entries = listOf(SignalEntry("Window", "0.5")),
+                ),
+                sig(SignalCategory.ACCESSIBILITY, "fontScale", value = "1.15"),
+            ),
+            emptyContext,
+        )
+
+        val accessibility = cardOf(cards, "accessibility")!!
+        assertEquals(
+            "Mink can see you use reduced or custom animation and a larger or smaller text size. Any " +
+                "app can read these flags with no prompt, and each one you change is a distinguishing " +
+                "detail.",
+            accessibility.body,
+        )
+    }
+
+    @Test
+    fun accessibilityIsNullWhenEveryFacetIsDefault() {
+        val cards = StoryNarrative.build(
+            snapshot(
+                sig(SignalCategory.ACCESSIBILITY, "touchExploration", value = "false"),
+                sig(
+                    SignalCategory.ACCESSIBILITY,
+                    "displayFlags",
+                    entries = listOf(
+                        SignalEntry("High contrast text", "false"),
+                        SignalEntry("Color inversion", "false"),
+                    ),
+                ),
+                sig(
+                    SignalCategory.ACCESSIBILITY,
+                    "animationScales",
+                    entries = listOf(SignalEntry("Window", "1.0")),
+                ),
+                sig(SignalCategory.ACCESSIBILITY, "fontScale", value = "1.0"),
+            ),
+            emptyContext,
+        )
+
+        assertNull(cardOf(cards, "accessibility"))
+    }
+
+    // ---- regionSettings ----
+
+    @Test
+    fun regionSettingsFiresOnAFirstDayOfWeekMismatch() {
+        // The US region baseline starts its week on Sunday, so a Monday start
+        // mismatches. First-day-of-week is the one facet a region reliably drives;
+        // the clock default is language- not region-driven and is not compared.
+        val cards = StoryNarrative.build(
+            snapshot(
+                sig(SignalCategory.LOCALE, "components", entries = countryEntry("US")),
+                sig(SignalCategory.LOCALE, "firstDayOfWeek", value = "Monday"),
+            ),
+            emptyContext,
+        )
+
+        val region = cardOf(cards, "regionSettings")!!
+        assertEquals("Your settings do not all match your region", region.title)
+        assertEquals(
+            "Your region is United States, but your week starts on Monday instead of Sunday — a small " +
+                "mismatch that itself stands out.",
+            region.body,
+        )
+        assertEquals("Comparing your settings with your region's defaults.", region.basis)
+    }
+
+    @Test
+    fun regionSettingsIsNullWhenTheFirstDayMatchesTheRegion() {
+        val cards = StoryNarrative.build(
+            snapshot(
+                sig(SignalCategory.LOCALE, "components", entries = countryEntry("US")),
+                sig(SignalCategory.LOCALE, "firstDayOfWeek", value = "Sunday"),
+            ),
+            emptyContext,
+        )
+
+        assertNull(cardOf(cards, "regionSettings"))
+    }
+
+    @Test
+    fun regionSettingsIsNullWhenTheRegionIsAbsent() {
+        // Without a country there is no region baseline to compare against.
+        val cards = StoryNarrative.build(
+            snapshot(
+                sig(SignalCategory.LOCALE, "firstDayOfWeek", value = "Monday"),
+                sig(SignalCategory.LOCALE, "clock", value = "24-hour"),
+            ),
+            emptyContext,
+        )
+
+        assertNull(cardOf(cards, "regionSettings"))
+    }
+
     // ---- build(): ordering and suppression ----
 
     @Test

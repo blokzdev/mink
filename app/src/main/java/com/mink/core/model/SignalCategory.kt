@@ -67,6 +67,10 @@ enum class SignalCategory(
         "network", "Network", "Interfaces, addresses, and VPN signals",
         "lan", Sensitivity.PASSIVE,
     ),
+    LOCAL_NETWORK(
+        "localNetwork", "Local Network", "Devices discovered on your Wi-Fi",
+        "wifi_find", Sensitivity.PASSIVE,
+    ),
     FONTS(
         "fonts", "Fonts", "Installed system fonts",
         "text_fields", Sensitivity.PASSIVE,

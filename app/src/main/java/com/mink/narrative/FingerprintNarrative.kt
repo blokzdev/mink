@@ -66,6 +66,7 @@ object FingerprintNarrative {
         SignalCategory.LOCALE,
         SignalCategory.STORAGE,
         SignalCategory.NETWORK,
+        SignalCategory.LOCAL_NETWORK,
         SignalCategory.GPU,
         SignalCategory.SENSORS,
         SignalCategory.INSTALLED_APPS,
@@ -163,6 +164,9 @@ object FingerprintNarrative {
                 "The size and setup date of your storage volume are surprisingly telling. $sample"
             SignalCategory.NETWORK ->
                 "Your network interfaces and VPN state are visible without a prompt. $sample"
+            SignalCategory.LOCAL_NETWORK ->
+                "The devices on your Wi-Fi are a stable, revealing set that rarely matches " +
+                    "another home. $sample"
             SignalCategory.GPU ->
                 "Your graphics chip reports a renderer string that acts like a hardware " +
                     "signature. $sample"
@@ -238,6 +242,8 @@ object FingerprintNarrative {
             "The combination of apps you have installed is close to unique to you."
         SignalCategory.CPU ->
             "The core layout and CPU features narrow the pool of possible devices."
+        SignalCategory.LOCAL_NETWORK ->
+            "The mix of devices on your Wi-Fi rarely matches another home."
         else ->
             "This reading helps single your phone out of the crowd."
     }
