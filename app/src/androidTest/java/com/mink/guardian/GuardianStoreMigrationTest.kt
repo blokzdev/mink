@@ -5,6 +5,12 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.mink.monitor.APP_ACCESS_SCHEMA_VERSION
 import com.mink.monitor.AppAccessSnapshot
 import com.mink.monitor.AppGrant
+import com.mink.monitor.HIGH_RISK_SCHEMA_VERSION
+import com.mink.monitor.HighRiskAdmin
+import com.mink.monitor.HighRiskCert
+import com.mink.monitor.HighRiskComponent
+import com.mink.monitor.HighRiskDefaultApp
+import com.mink.monitor.HighRiskSnapshot
 import com.mink.monitor.PermCapability
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -172,5 +178,70 @@ class GuardianStoreMigrationTest {
 
         // Re-encrypted by migration, but discarded by the schema-version guard.
         assertNull("schemaVersion 0 must be discarded on load", store.loadAppAccessSnapshot())
+    }
+
+    @Test
+    fun highRiskSnapshotRoundTripsThroughEncryptionAndIsNotPlaintext() = runBlocking {
+        val cipher = KeystorePayloadCipher(alias = "mink.guardian.test." + System.nanoTime())
+        val store = encryptingStore(cipher)
+
+        val snapshot = HighRiskSnapshot(
+            schemaVersion = HIGH_RISK_SCHEMA_VERSION,
+            generatedAtMs = 5_000L,
+            accessibilityServices = listOf(
+                HighRiskComponent(id = "com.example.a11y/.Service", label = "A11y"),
+            ),
+            notificationListeners = listOf(
+                HighRiskComponent(id = "com.example.notif/.Listener", label = "Notif"),
+            ),
+            deviceAdmins = listOf(
+                HighRiskAdmin(
+                    packageName = "com.example.mdm",
+                    label = "MDM",
+                    isDeviceOwner = true,
+                    isProfileOwner = false,
+                ),
+            ),
+            userCertificates = listOf(
+                HighRiskCert(id = "user:42", label = "Example Root CA"),
+            ),
+            defaultApps = mapOf(
+                "sms" to HighRiskDefaultApp("com.example.sms", "SMS"),
+                "browser" to HighRiskDefaultApp("com.example.browser", "Browser"),
+            ),
+            vpnActive = true,
+        )
+        store.saveHighRiskSnapshot(snapshot)
+
+        // Readable through the encrypting store...
+        assertEquals(snapshot, store.loadHighRiskSnapshot())
+
+        // ...and actually encrypted: a store with no cipher sees ciphertext it
+        // cannot parse back into a snapshot.
+        assertNull(
+            "legacy read of encrypted snapshot should yield nothing",
+            legacyStore().loadHighRiskSnapshot(),
+        )
+    }
+
+    @Test
+    fun legacyVersionZeroHighRiskSnapshotIsDiscardedOnLoad() = runBlocking {
+        val cipher = KeystorePayloadCipher(alias = "mink.guardian.test." + System.nanoTime())
+
+        // A pre-versioning build persisted a schemaVersion-0 snapshot as plaintext.
+        val legacy = HighRiskSnapshot(
+            schemaVersion = 0,
+            generatedAtMs = 1_000L,
+            accessibilityServices = listOf(
+                HighRiskComponent(id = "com.example.a11y/.Service", label = "A11y"),
+            ),
+        )
+        legacyStore().saveHighRiskSnapshot(legacy)
+
+        val store = encryptingStore(cipher)
+        store.migrateLegacyPayloads()
+
+        // Re-encrypted by migration, but discarded by the schema-version guard.
+        assertNull("schemaVersion 0 must be discarded on load", store.loadHighRiskSnapshot())
     }
 }

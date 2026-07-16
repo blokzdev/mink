@@ -15,9 +15,11 @@ import com.mink.guardian.llm.LlamaBridge
 import com.mink.guardian.llm.LlmEngine
 import com.mink.guardian.llm.MiniCpmChatFormat
 import com.mink.monitor.AppAccessScanner
+import com.mink.monitor.HighRiskScanner
 import com.mink.monitor.SensorInUseMonitor
 import com.mink.monitor.TrackedSession
 import com.mink.monitor.diffAppAccess
+import com.mink.monitor.diffHighRisk
 import com.mink.monitor.toSnapshot
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -68,6 +70,13 @@ class GuardianController(
      * before the UI graph and must stay self-contained.
      */
     private val appAccessScanner = AppAccessScanner(appContext)
+
+    /**
+     * The guardian's high-risk security-surface scanner. Its own instance for the
+     * same reason as [appAccessScanner]: the guardian is constructed before the UI
+     * graph and must stay self-contained.
+     */
+    private val highRiskScanner = HighRiskScanner(appContext)
 
     /**
      * Near real-time camera/microphone use watch. Sessions arrive on the
@@ -294,13 +303,37 @@ class GuardianController(
                     }
                 }.getOrDefault(emptyList())
 
+                // Watch the classic device-compromise surfaces: accessibility
+                // services, notification listeners, device admins, user CAs, default
+                // apps, and a device-wide VPN. The scanner already carries each
+                // surface forward on a read failure, so there is no separate
+                // empty-scan guard — a fully-failed scan simply re-persists the
+                // carried-forward previous and diffs to nothing. Persist-then-emit:
+                // the saved snapshot is the commit point, so a failed write cannot
+                // re-diff and re-notify the same change on every following sweep.
+                val highRiskAlerts = runCatching {
+                    val previousHr = runCatching { persistence.loadHighRiskSnapshot() }.getOrNull()
+                    val currentHr = highRiskScanner.scan(now, previousHr)
+                    val findings = diffHighRisk(previousHr, currentHr)
+                    val saved = runCatching { persistence.saveHighRiskSnapshot(currentHr) }.isSuccess
+                    if (saved && findings.isNotEmpty()) {
+                        val mapped =
+                            highRiskFindingsToGuardian(findings, now) { UUID.randomUUID().toString() }
+                        addObservations(mapped.observations)
+                        addAlerts(mapped.alerts)
+                        mapped.alerts
+                    } else {
+                        emptyList()
+                    }
+                }.getOrDefault(emptyList())
+
                 _state.update { it.copy(lastSweepEpochMs = System.currentTimeMillis()) }
 
                 // Surface alerts through notifications as the gate decides. App-access
-                // alerts join the same merged pass so nothing is notified twice. The
-                // gate's cooldown runs on the monotonic clock, so wall-clock jumps
-                // cannot stretch or cancel the suppression window.
-                (newAlerts + appAccessAlerts)
+                // and high-risk alerts join the same merged pass so nothing is notified
+                // twice. The gate's cooldown runs on the monotonic clock, so wall-clock
+                // jumps cannot stretch or cancel the suppression window.
+                (newAlerts + appAccessAlerts + highRiskAlerts)
                     .filter { notificationGate.shouldNotify(it, settings, android.os.SystemClock.elapsedRealtime()) }
                     .forEach { GuardianService.postAlertNotification(appContext, it) }
             }

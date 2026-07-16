@@ -4,6 +4,7 @@ package com.mink.guardian
 enum class AlertSource(val label: String) {
     ACCESS_CHANGES("Access changes"),
     SENSOR_USE("Sensor use"),
+    SECURITY_CHANGES("Security settings"),
     SIGNAL_CHANGES("Signal changes"),
     EXPOSURE_INSIGHTS("Exposure insights"),
 }
@@ -13,6 +14,7 @@ fun alertSource(alert: GuardianAlert): AlertSource = when {
     alert.id.startsWith("rule.") -> AlertSource.EXPOSURE_INSIGHTS
     alert.categoryId == APP_ACCESS_CATEGORY -> AlertSource.ACCESS_CHANGES
     alert.categoryId == SENSOR_USE_CATEGORY -> AlertSource.SENSOR_USE
+    alert.categoryId == HIGH_RISK_CATEGORY -> AlertSource.SECURITY_CHANGES
     else -> AlertSource.SIGNAL_CHANGES
 }
 

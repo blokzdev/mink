@@ -305,6 +305,17 @@ What has landed:
   `fromImmutableRule` (`GuardianAlert`), and the notification gate
   (`AlertPolicy.kt`) exempts them from the alertness dial, the per-source
   mutes, and the repeat cooldown — user configuration can never silence them.
+- **Lane 4's security-posture watch**: a per-sweep watch over six
+  device-compromise surfaces — enabled accessibility services and notification
+  listeners, active device admins, user-added CA certificates, the default-app
+  roles, and a device-wide VPN (`HighRiskScanner` / `diffHighRisk` /
+  `HighRiskGuard`), persisted as an encrypted, schema-versioned
+  `HighRiskSnapshot` and diffed across sweeps like the app-access node. Lane 5
+  is unchanged: every one of these surfaces has a legitimate use, so all
+  findings are ordinary WARNINGs under the alertness dial and a new per-source
+  mute, with no new immutable rule — deliberately, since a never-tunable
+  CRITICAL would misfire (a cross-surface spyware combo is a candidate future
+  immutable rule; see `HighRiskGuard`).
 
 What is designed but not built:
 

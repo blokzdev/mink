@@ -8,6 +8,8 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.mink.monitor.APP_ACCESS_SCHEMA_VERSION
 import com.mink.monitor.AppAccessSnapshot
+import com.mink.monitor.HIGH_RISK_SCHEMA_VERSION
+import com.mink.monitor.HighRiskSnapshot
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
@@ -172,6 +174,35 @@ class GuardianStore(
         writeRaw(KEY_APP_ACCESS, raw)
     }
 
+    // ---- High-risk access snapshot ----
+
+    /**
+     * The last persisted high-risk snapshot, or null if none is stored yet, it
+     * fails to parse, or its [HighRiskSnapshot.schemaVersion] does not match
+     * [HIGH_RISK_SCHEMA_VERSION]. Discard-on-mismatch mirrors
+     * [loadAppAccessSnapshot]: a legacy (unversioned, decodes to 0) or
+     * future/downgrade blob may be shaped differently, and misreading it is worse
+     * than losing it — a discarded snapshot just means the next sweep records
+     * fresh state and diffs nothing.
+     *
+     * [HighRiskSnapshot] is `@Serializable` directly (data-layer machinery, not a
+     * public contract type), so no DTO mirror.
+     */
+    suspend fun loadHighRiskSnapshot(): HighRiskSnapshot? {
+        val raw = readRaw(KEY_HIGH_RISK) ?: return null
+        val snapshot = runCatching {
+            json.decodeFromString(HighRiskSnapshot.serializer(), raw)
+        }.getOrNull() ?: return null
+        return if (snapshot.schemaVersion == HIGH_RISK_SCHEMA_VERSION) snapshot else null
+    }
+
+    suspend fun saveHighRiskSnapshot(snapshot: HighRiskSnapshot) {
+        val raw = runCatching {
+            json.encodeToString(HighRiskSnapshot.serializer(), snapshot)
+        }.getOrNull() ?: return
+        writeRaw(KEY_HIGH_RISK, raw)
+    }
+
     // ---- generic list helpers ----
 
     private suspend fun <T> readList(
@@ -246,7 +277,7 @@ class GuardianStore(
         val ALL_KEYS: List<Preferences.Key<String>>
             get() = listOf(
                 KEY_OBSERVATIONS, KEY_ALERTS, KEY_CHAT, KEY_SETTINGS, KEY_SNAPSHOT,
-                KEY_BASELINE, KEY_APP_ACCESS,
+                KEY_BASELINE, KEY_APP_ACCESS, KEY_HIGH_RISK,
             )
 
         val KEY_OBSERVATIONS = stringPreferencesKey("observations")
@@ -256,6 +287,7 @@ class GuardianStore(
         val KEY_SNAPSHOT = stringPreferencesKey("last_snapshot")
         val KEY_BASELINE = stringPreferencesKey("baseline")
         val KEY_APP_ACCESS = stringPreferencesKey("app_access")
+        val KEY_HIGH_RISK = stringPreferencesKey("high_risk")
     }
 }
 

@@ -43,6 +43,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mink.data.MinkServices
 import com.mink.guardian.APP_ACCESS_CATEGORY
+import com.mink.guardian.HIGH_RISK_CATEGORY
 import com.mink.guardian.Observation
 import com.mink.guardian.SENSOR_USE_CATEGORY
 import com.mink.monitor.CapabilityHolders
@@ -107,7 +108,11 @@ fun WatchedAppsScreen(
         val report by monitor.report.collectAsStateWithLifecycle()
 
         val changes = observations
-            .filter { it.categoryId == APP_ACCESS_CATEGORY || it.categoryId == SENSOR_USE_CATEGORY }
+            .filter {
+                it.categoryId == APP_ACCESS_CATEGORY ||
+                    it.categoryId == SENSOR_USE_CATEGORY ||
+                    it.categoryId == HIGH_RISK_CATEGORY
+            }
             .sortedByDescending { it.epochMs }
         val now = System.currentTimeMillis()
         val context = LocalContext.current
@@ -179,7 +184,9 @@ private fun IntroLine() {
                 "on your device; nothing leaves the phone. Mink also notices the moment the " +
                 "camera or microphone turns on. Android hides which app is using them, so when " +
                 "you allow usage access Mink names the app on screen at that moment as its " +
-                "best guess.",
+                "best guess. Mink also watches the settings that matter most for security — " +
+                "accessibility services, notification access, device admins, certificates, " +
+                "default apps and VPNs — and tells you when one changes.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
         )
