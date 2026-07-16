@@ -6,6 +6,7 @@ import androidx.core.content.ContextCompat
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import com.mink.companion.CompanionRemark
 import com.mink.core.model.FingerprintSignal
 import com.mink.core.model.SignalCategory
 import com.mink.data.LoadState
@@ -25,6 +26,7 @@ import com.mink.monitor.dataUseWindow
 import com.mink.monitor.diffAppAccess
 import com.mink.monitor.diffHighRisk
 import com.mink.monitor.toSnapshot
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -494,6 +496,25 @@ class GuardianController(
         updateMessage(reply)
         scope.launch(Dispatchers.IO) { runCatching { persistence.saveChatLog(_chatLog.value) } }
     }.flowOn(Dispatchers.Default)
+
+    /**
+     * Author one calm companion remark for [alert] on the on-device model, or
+     * null to fall back to the alert title. A leaf with a deterministic fallback:
+     * the rules already picked the finding and the mood; the model only writes
+     * the sentence, and any failure or empty output degrades to the title. No
+     * chat-log persistence — this is a side utterance, not a conversation turn.
+     */
+    override suspend fun composeRemark(alert: GuardianAlert): String? {
+        if (capability.tier == GuardianTier.RULES_ONLY || !llmEngine.isLoaded) return null
+        return runCatching {
+            val prompt = CompanionRemark.buildRemarkPrompt(alert)
+            val raw = StringBuilder()
+            llmEngine
+                .generate(prompt, GenParams.noThink(maxTokens = CompanionRemark.REMARK_MAX_TOKENS))
+                .collect { raw.append(it) }
+            CompanionRemark.postProcessRemark(raw.toString()).ifBlank { null }
+        }.getOrElse { if (it is CancellationException) throw it else null }
+    }
 
     // ---- internals ----
 

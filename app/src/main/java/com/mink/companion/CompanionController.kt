@@ -47,12 +47,22 @@ class CompanionController(
     private val announcedAlertIds = mutableSetOf<String>()
     private var clearBubbleJob: Job? = null
 
+    /** Guards the timer-job cancel+assign swaps that run from several dispatchers. */
+    private val jobLock = Any()
+
+    /** The calm engine that gates speech; mood and animation are not gated. */
+    private val speechPolicy = CompanionSpeechPolicy()
+
+    /** The quiet-timer that eases the sprite to sleep after a lull. */
+    private var sleepJob: Job? = null
+
     private val appContext = context.applicationContext
 
     init {
         // Treat everything already on the board as seen, so enabling the
-        // companion never replays a backlog of old warnings.
-        guardian.alerts.value.forEach { announcedAlertIds += it.id }
+        // companion never replays a backlog of old warnings. Key by id and level
+        // so a persisted alert re-graded upward can still be re-admitted.
+        guardian.alerts.value.forEach { announcedAlertIds += "${it.id}|${it.level}" }
 
         // Restore the persisted opt-in so the overlay and the controller agree
         // after a process-death restart, mirroring how the guardian restores.
@@ -66,12 +76,20 @@ class CompanionController(
         scope.launch {
             guardian.alerts.collect { alerts ->
                 val fresh = alerts.filter {
-                    it.id !in announcedAlertIds && isSpeakable(it.level)
+                    "${it.id}|${it.level}" !in announcedAlertIds && isSpeakable(it.level)
                 }
-                alerts.forEach { announcedAlertIds += it.id }
-                if (_enabled.value) {
-                    fresh.maxByOrNull { it.createdAtEpochMs }?.let { speakAlert(it) }
-                }
+                alerts.forEach { announcedAlertIds += "${it.id}|${it.level}" }
+                val richest = richestAlert(fresh) ?: return@collect
+
+                // Rules pick the mood; the sprite animates for every fresh
+                // finding and the quiet-timer restarts. Speech is gated
+                // separately, so the sprite stays lively while the voice is rare.
+                setMood(CompanionRemark.moodForAlert(richest.level, richest.categoryId))
+                scheduleSleep()
+
+                val now = System.currentTimeMillis()
+                val toSpeak = speechPolicy.chooseToSpeak(fresh, now)
+                if (toSpeak != null && _enabled.value) speakAlert(toSpeak, now)
             }
         }
     }
@@ -92,12 +110,14 @@ class CompanionController(
         persistEnabled(true)
         setMood(CompanionMood.IDLE)
         CompanionOverlayService.start(context)
+        scheduleSleep()
     }
 
     override fun disable() {
         _enabled.value = false
         persistEnabled(false)
         clearBubbleJob?.cancel()
+        sleepJob?.cancel()
         _utterance.value = null
         CompanionLink.utterance.value = null
         CompanionLink.bubbleVisible.value = false
@@ -118,11 +138,14 @@ class CompanionController(
         CompanionLink.bubbleVisible.value = true
         setMood(utterance.mood)
 
-        clearBubbleJob?.cancel()
-        clearBubbleJob = scope.launch {
-            delay(BUBBLE_VISIBLE_MS)
-            CompanionLink.bubbleVisible.value = false
+        synchronized(jobLock) {
+            clearBubbleJob?.cancel()
+            clearBubbleJob = scope.launch {
+                delay(BUBBLE_VISIBLE_MS)
+                CompanionLink.bubbleVisible.value = false
+            }
         }
+        scheduleSleep()
     }
 
     override fun setMood(mood: CompanionMood) {
@@ -130,28 +153,66 @@ class CompanionController(
         CompanionLink.mood.value = mood
     }
 
-    private fun speakAlert(alert: GuardianAlert) {
-        val mood = if (alert.level == AlertLevel.CRITICAL) {
-            CompanionMood.ALERT
-        } else {
-            CompanionMood.CURIOUS
+    /**
+     * Compose and voice a remark for [alert] without blocking the collector. The
+     * mood is already set; here the model writes the sentence, falling back to
+     * the alert title when no model is loaded or the call fails.
+     */
+    private fun speakAlert(alert: GuardianAlert, nowMs: Long) {
+        scope.launch {
+            val text = guardian.composeRemark(alert) ?: alert.title
+            // composeRemark is slow; if the user disabled the companion while it
+            // ran, stay silent rather than pop a bubble for a disabled companion.
+            if (!_enabled.value) return@launch
+            say(
+                CompanionUtterance(
+                    text = text,
+                    mood = CompanionRemark.moodForAlert(alert.level, alert.categoryId),
+                    epochMs = nowMs,
+                    actionLabel = "See details",
+                    actionRoute = CompanionLink.ROUTE_GUARDIAN,
+                ),
+            )
         }
-        say(
-            CompanionUtterance(
-                text = alert.title,
-                mood = mood,
-                epochMs = alert.createdAtEpochMs,
-                actionLabel = "See details",
-                actionRoute = CompanionLink.ROUTE_GUARDIAN,
-            ),
-        )
     }
+
+    /**
+     * Restart the quiet-timer: after a lull with no utterance the sprite eases to
+     * sleep. Any say() or fresh alert restarts it; disabling cancels it. Kept
+     * simple and lifecycle-safe — the enabled check runs again when it fires.
+     */
+    private fun scheduleSleep() {
+        synchronized(jobLock) {
+            sleepJob?.cancel()
+            if (!_enabled.value) return
+            sleepJob = scope.launch {
+                delay(SLEEP_AFTER_MS)
+                if (_enabled.value) setMood(CompanionMood.SLEEPING)
+            }
+        }
+    }
+
+    /**
+     * The richest of [alerts]: highest severity (critical over warning),
+     * tie-broken by the longest body then the newest finding, matching the
+     * speech policy's burst-merge so the mood and the voiced line agree. Null
+     * when there is nothing fresh to react to.
+     */
+    private fun richestAlert(alerts: List<GuardianAlert>): GuardianAlert? =
+        alerts.maxWithOrNull(
+            compareBy<GuardianAlert> { if (it.level == AlertLevel.CRITICAL) 1 else 0 }
+                .thenBy { it.body.length }
+                .thenBy { it.createdAtEpochMs },
+        )
 
     private fun isSpeakable(level: AlertLevel): Boolean =
         level == AlertLevel.WARNING || level == AlertLevel.CRITICAL
 
     private companion object {
         const val BUBBLE_VISIBLE_MS = 9_000L
+
+        /** Ease the sprite to sleep after this quiet stretch. Tunable. */
+        const val SLEEP_AFTER_MS = 5L * 60L * 1000L
         val KEY_ENABLED = booleanPreferencesKey("companion_enabled")
     }
 }

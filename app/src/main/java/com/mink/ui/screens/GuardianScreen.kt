@@ -29,6 +29,7 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -49,6 +50,7 @@ import com.mink.guardian.MIN_SWEEPS_FOR_LEARNING
 import com.mink.guardian.ModelStatus
 import com.mink.guardian.Observation
 import com.mink.guardian.learningDurationPhrase
+import com.mink.ui.nav.ChatPrefill
 
 /**
  * The guardian dashboard: current tier and model status, an opt-in download,
@@ -179,7 +181,14 @@ fun GuardianScreen(
                 item { EmptyLine("No alerts. Mink will speak up if something changes.") }
             } else {
                 items(events, key = { it.id }) { alert ->
-                    AlertCard(alert, onAcknowledge = { guardian.acknowledgeAlert(alert.id) })
+                    AlertCard(
+                        alert,
+                        onAcknowledge = { guardian.acknowledgeAlert(alert.id) },
+                        onAskMink = {
+                            ChatPrefill.offer("What does this mean: ${alert.title}?")
+                            onOpenChat()
+                        },
+                    )
                 }
             }
 
@@ -195,7 +204,14 @@ fun GuardianScreen(
                     )
                 }
                 items(insights, key = { it.id }) { alert ->
-                    AlertCard(alert, onAcknowledge = { guardian.acknowledgeAlert(alert.id) })
+                    AlertCard(
+                        alert,
+                        onAcknowledge = { guardian.acknowledgeAlert(alert.id) },
+                        onAskMink = {
+                            ChatPrefill.offer("What does this mean: ${alert.title}?")
+                            onOpenChat()
+                        },
+                    )
                 }
             }
 
@@ -267,7 +283,7 @@ private fun ModelStatusBlock(
 }
 
 @Composable
-private fun AlertCard(alert: GuardianAlert, onAcknowledge: () -> Unit) {
+private fun AlertCard(alert: GuardianAlert, onAcknowledge: () -> Unit, onAskMink: () -> Unit) {
     val tint = when (alert.level) {
         AlertLevel.CRITICAL -> MaterialTheme.colorScheme.error
         AlertLevel.WARNING -> MaterialTheme.colorScheme.tertiary
@@ -288,9 +304,15 @@ private fun AlertCard(alert: GuardianAlert, onAcknowledge: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.82f),
             )
-            if (!alert.acknowledged) {
-                Spacer(Modifier.height(8.dp))
-                FilledTonalButton(onClick = onAcknowledge) { Text("Got it") }
+            Spacer(Modifier.height(8.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (!alert.acknowledged) {
+                    FilledTonalButton(onClick = onAcknowledge) { Text("Got it") }
+                }
+                TextButton(onClick = onAskMink) { Text("Ask Mink about this") }
             }
         }
     }
