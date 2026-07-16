@@ -233,6 +233,44 @@ honest limits bound the VPN surface: a device-wide VPN is detectable but a
 normal app cannot learn which app owns it, so Mink never names one, and a
 per-app VPN that excludes Mink may be missed entirely.
 
+### Data use
+
+`NetworkUsageScanner` (`com.mink.monitor`) is the guardian's per-app
+data-volume awareness, and the deliberate alternative to a `VpnService` flow
+attribution: rather than intercept traffic to learn destinations, it reads how
+*much* each app moved from `NetworkStatsManager` and never learns where any of
+it went. Each scan queries per-uid summaries over two passes — `TYPE_WIFI` then
+`TYPE_MOBILE` — accumulates rx+tx per uid, splits the cellular total into its
+roaming and background (`STATE_DEFAULT`) subsets, then resolves each uid to a
+labelled app through `PackageManager`. The read runs off the main thread and the
+whole scan is wrapped so a `SecurityException` (usage access not granted), a
+`RemoteException` (the stats service died), or a null `querySummary` all yield an
+empty report for the window rather than an error. It reuses the same usage-access
+grant the sensor watcher already asks for, so it adds no manifest permission.
+
+The watcher is delta-native. `GuardianStore` persists a single
+`lastNetworkCheckMs` cursor, and each sweep scans only the interval *since* the
+last check, so ongoing heavy usage is noticed once rather than re-alerted every
+sweep. Persist-then-emit holds as elsewhere: the cursor is saved before any alert
+is emitted, so a failed emit re-detects next interval rather than re-alerting,
+and a first run with no prior cursor just seeds it — no alert on pre-existing
+usage, matching the App Access "first sweep records baseline" rule.
+`analyzeDataUsage` (pure, in `NetworkUsage.kt`) reduces one interval's volumes to
+findings and `NetworkUsageGuard` maps each to an observation and a WARNING: a
+user app that moved a lot of cellular data in the background, or a lot while
+roaming. Both thresholds are ordinary tunable rules, not lane-5 immutables, and
+only user apps are considered — a system app's background and roaming traffic is
+expected. The **Data use** screen (`ui/screens/NetworkUsageScreen.kt`) shows the
+top apps by total over the last week, each split into cellular, Wi-Fi, roaming,
+and background.
+
+The honesty limit is hard and load-bearing: this is volumes only. Android does
+not reveal to a normal app which servers or hosts an app talked to, so no copy
+anywhere — finding, alert, or screen — implies a destination, an exfiltration
+target, or "where your data went". Background is the platform's coarse per-uid
+state counter, reported as "in the background", never as a claim about what the
+owner was doing while it ran.
+
 ## The companion
 
 `CompanionController` implements `Companion`. It manages the overlay permission,

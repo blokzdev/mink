@@ -21,6 +21,7 @@ import com.mink.ui.screens.ExportScreen
 import com.mink.ui.screens.GuardianChatScreen
 import com.mink.ui.screens.GuardianScreen
 import com.mink.ui.screens.HomeScreen
+import com.mink.ui.screens.NetworkUsageScreen
 import com.mink.ui.screens.OnboardingScreen
 import com.mink.ui.screens.PermissionsScreen
 import com.mink.ui.screens.SummaryScreen
@@ -40,12 +41,16 @@ object MinkRoute {
     const val PERMISSIONS = "permissions"
     const val APP_ACCESS = "app_access"
     const val WATCHED_APPS = "watched_apps"
+    const val NETWORK_USAGE = "network_usage"
 
     fun category(category: SignalCategory): String = "category/${category.id}"
 
     /** Routes a companion bubble action is allowed to deep-link into. */
     private val deepLinkable =
-        setOf(HOME, GUARDIAN, COMPANION, SUMMARY, ABOUT, EXPORT, PERMISSIONS, APP_ACCESS, WATCHED_APPS)
+        setOf(
+            HOME, GUARDIAN, COMPANION, SUMMARY, ABOUT, EXPORT, PERMISSIONS, APP_ACCESS,
+            WATCHED_APPS, NETWORK_USAGE,
+        )
 
     /** Whether [route] is a known, parameterless destination we can navigate to. */
     fun isDeepLinkable(route: String?): Boolean = route != null && route in deepLinkable
@@ -163,6 +168,13 @@ fun MinkNavHost(
                 services = services,
                 onBack = { navController.popBackStack() },
                 onOpenAppAccess = { navController.navigate(MinkRoute.APP_ACCESS) },
+            )
+        }
+
+        composable(MinkRoute.NETWORK_USAGE) {
+            NetworkUsageScreen(
+                services = services,
+                onBack = { navController.popBackStack() },
             )
         }
     }

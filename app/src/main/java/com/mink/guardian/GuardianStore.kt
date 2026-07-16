@@ -203,6 +203,22 @@ class GuardianStore(
         writeRaw(KEY_HIGH_RISK, raw)
     }
 
+    // ---- Data-use interval cursor ----
+
+    /**
+     * The wall-clock time of the last data-use check, or null if none is stored
+     * yet or the stored value fails to parse. A single scalar, not a
+     * schema-versioned blob, so a parse failure simply reseeds the cursor on the
+     * next sweep — the data-use watcher diffs the interval since this time, never
+     * re-alerting the same ongoing usage every sweep.
+     */
+    suspend fun loadLastNetworkCheckMs(): Long? =
+        readRaw(KEY_LAST_NETWORK_CHECK)?.toLongOrNull()
+
+    suspend fun saveLastNetworkCheckMs(ms: Long) {
+        writeRaw(KEY_LAST_NETWORK_CHECK, ms.toString())
+    }
+
     // ---- generic list helpers ----
 
     private suspend fun <T> readList(
@@ -277,7 +293,7 @@ class GuardianStore(
         val ALL_KEYS: List<Preferences.Key<String>>
             get() = listOf(
                 KEY_OBSERVATIONS, KEY_ALERTS, KEY_CHAT, KEY_SETTINGS, KEY_SNAPSHOT,
-                KEY_BASELINE, KEY_APP_ACCESS, KEY_HIGH_RISK,
+                KEY_BASELINE, KEY_APP_ACCESS, KEY_HIGH_RISK, KEY_LAST_NETWORK_CHECK,
             )
 
         val KEY_OBSERVATIONS = stringPreferencesKey("observations")
@@ -288,6 +304,7 @@ class GuardianStore(
         val KEY_BASELINE = stringPreferencesKey("baseline")
         val KEY_APP_ACCESS = stringPreferencesKey("app_access")
         val KEY_HIGH_RISK = stringPreferencesKey("high_risk")
+        val KEY_LAST_NETWORK_CHECK = stringPreferencesKey("last_network_check")
     }
 }
 

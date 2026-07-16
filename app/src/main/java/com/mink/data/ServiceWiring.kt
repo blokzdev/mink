@@ -4,6 +4,7 @@ import android.content.Context
 import com.mink.companion.Companion
 import com.mink.guardian.Guardian
 import com.mink.monitor.AppAccessMonitor
+import com.mink.monitor.NetworkUsageMonitor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -38,8 +39,9 @@ object ServiceWiring {
             runCatching { companionFactory?.invoke(appContext, g, appScope) }.getOrNull()
         }
 
-        // App access is independent of guardian/companion and cannot fail to construct.
+        // App access and data use are independent of guardian/companion and cannot fail to construct.
         val appAccess = AppAccessMonitor(appContext, appScope)
+        val networkUsage = NetworkUsageMonitor(appContext, appScope)
 
         return MinkServices(
             store = store,
@@ -48,6 +50,7 @@ object ServiceWiring {
             guardian = guardian,
             companion = companion,
             appAccess = appAccess,
+            networkUsage = networkUsage,
         )
     }
 

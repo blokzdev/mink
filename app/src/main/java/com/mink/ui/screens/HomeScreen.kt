@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Pets
@@ -117,6 +118,14 @@ fun HomeScreen(
                     title = "App access",
                     subtitle = "See which apps can reach your location, camera, and microphone.",
                     onClick = { navController.navigate(MinkRoute.APP_ACCESS) },
+                )
+            }
+            item {
+                EntryBanner(
+                    icon = Icons.Filled.DataUsage,
+                    title = "Data use",
+                    subtitle = "See how much data each app uses, on cellular and in the background.",
+                    onClick = { navController.navigate(MinkRoute.NETWORK_USAGE) },
                 )
             }
 

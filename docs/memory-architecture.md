@@ -320,6 +320,17 @@ What has landed:
   "story" cards (`StoryNarrative`, Loupe `FingerprintNarrative` parity), pure
   over the existing signal snapshot and the app-access report — no new signal
   source and no new permission, and nothing persisted (inference, not memory).
+- **Lane 4's per-app data-use signal**: per-app data *volumes* read from
+  `NetworkStatsManager` each sweep (`NetworkUsageScanner` / `analyzeDataUsage` /
+  `NetworkUsageGuard`), diffed delta-native against a single persisted
+  `lastNetworkCheckMs` cursor so only the interval since the last check is
+  considered — not re-alerting the same ongoing usage. It adds no manifest
+  permission (it reuses the existing usage-access grant) and is explicitly *not*
+  destination or flow attribution — the chosen alternative to a `VpnService`, it
+  records how much each app moved over Wi-Fi, cellular, roaming, and in the
+  background, never where any of it went. Lane 5 is unchanged: heavy
+  background-cellular or roaming raises an ordinary tunable WARNING, not an
+  immutable rule.
 
 What is designed but not built:
 
