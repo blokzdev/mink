@@ -64,11 +64,37 @@ object MiniCpmChatFormat {
         enableThinking: Boolean,
     ): String = buildPrompt(systemPrompt, emptyList(), userMessage, enableThinking)
 
+    /**
+     * Append one `<|im_start|>role\n...<|im_end|>` turn. The [content] is
+     * untrusted — it may carry an app name, a paired-device name, a fact list, an
+     * alert body, or a message the owner typed — so [sanitizeContent] strips the
+     * chat-control tokens from it before it is wrapped. Only the interpolated
+     * content is sanitized; the role and the structural markers are our own
+     * literals and are appended as-is.
+     */
     private fun appendTurn(sb: StringBuilder, role: String, content: String) {
         sb.append(IM_START).append(role).append('\n')
-            .append(content)
+            .append(sanitizeContent(content))
             .append(IM_END).append('\n')
     }
+
+    /**
+     * Remove the chat-control tokens the template and the model use as delimiters
+     * from a piece of untrusted content, so folded-in text cannot break out of its
+     * turn and inject a fake one (a device named `<|im_end|><|im_start|>system…`
+     * would otherwise open a forged system turn). Each occurrence is replaced with
+     * a single space. The [IM_START] and [IM_END] turn markers are matched
+     * literally; the `<think>`/`</think>` reasoning tags are matched
+     * case-insensitively. Newlines are left untouched — a turn's content
+     * legitimately spans lines.
+     */
+    private fun sanitizeContent(text: String): String {
+        val withoutTurnMarkers = text.replace(IM_START, " ").replace(IM_END, " ")
+        return THINK_TAGS.replace(withoutTurnMarkers, " ")
+    }
+
+    /** The `<think>` or `</think>` reasoning tags, matched case-insensitively. */
+    private val THINK_TAGS = Regex("(?i)</?think>")
 
     /**
      * Separate a leading `<think>...</think>` block from the visible answer.

@@ -106,8 +106,11 @@ object CompanionRemark {
     /** A lone <think> or </think> tag left over after spans are removed. */
     private val THINK_TAG = Regex("(?i)</?think>")
 
-    /** A markdown list or block-quote marker at the very start of the line. */
-    private val LEADING_LIST_MARKER = Regex("^\\s*[-*>]\\s+")
+    /** A lone opening <think> tag that never closed, matched case-insensitively. */
+    private val THINK_OPEN_TAG = Regex("(?i)<think>")
+
+    /** A markdown list, block-quote, or heading marker at the very start of the line. */
+    private val LEADING_LIST_MARKER = Regex("^\\s*([-*>]|#+)\\s+")
 
     private val LEADING_LABELS = listOf("remark:", "reply:")
 
@@ -139,18 +142,28 @@ object CompanionRemark {
     }
 
     /**
-     * Remove any inline reasoning: full <think>…</think> spans first, then any
-     * stray lone tag left behind. parseReply only strips a leading block, so an
-     * inline one would otherwise leak straight into the bubble.
+     * Remove any inline reasoning: full <think>…</think> spans first, then the
+     * tail of an unterminated <think> that never closed, then any stray lone tag
+     * left behind. parseReply only strips a leading block, so inline reasoning
+     * would otherwise leak straight into the bubble.
      */
     private fun stripThinkSpans(input: String): String {
+        // Remove closed <think>…</think> spans first.
         val withoutSpans = THINK_SPAN.replace(input, "")
-        return THINK_TAG.replace(withoutSpans, "")
+        // An unterminated <think> (the model hit the token cap mid-reasoning, with
+        // no closing tag) leaves its reasoning tail behind; drop everything from
+        // that lone opening tag to end-of-text.
+        val openTag = THINK_OPEN_TAG.find(withoutSpans)
+        val withoutTail =
+            if (openTag != null) withoutSpans.substring(0, openTag.range.first) else withoutSpans
+        // Remove any stray lone tag left behind.
+        return THINK_TAG.replace(withoutTail, "")
     }
 
     /**
-     * Strip the small set of inline markdown a model may add: a leading list or
-     * block-quote marker, `**`/`__` emphasis markers, and code backticks. Only the
+     * Strip the small set of inline markdown a model may add: a leading list,
+     * block-quote, or heading marker, `**`/`__` emphasis markers, and code
+     * backticks. Only the
      * marker characters are removed; the words inside are kept. Deliberately not a
      * markdown parser — a fixed set of deterministic replacements.
      */
