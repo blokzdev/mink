@@ -196,6 +196,43 @@ Alerts list. One thing outranks the whole policy: an alert flagged
 combo) always notifies — no dial setting, mute, or cooldown can silence a
 lane-5 immutable rule.
 
+### High-risk access
+
+`HighRiskScanner` (`com.mink.monitor`) is the guardian's third behavioural
+signal: each sweep it reads the classic device-compromise surfaces — enabled
+accessibility services and notification listeners belonging to other apps,
+active device admins, user-added CA certificates, the four default-app roles
+(SMS, browser, keyboard, phone), and whether a device-wide VPN is routing
+traffic. Every read is permission-free or covered by permissions the app
+already holds, so the watcher adds no manifest permission. `diffHighRisk`
+reduces two snapshots to a list of `HighRiskFinding`s, and `HighRiskGuard` maps
+each to an observation and, for the surfaces that warrant it, an alert.
+
+The read model matters. Each surface is read independently, and a read that
+*throws* carries the previous snapshot's value forward, so a transient failure
+never diffs as a removal; a read that *succeeds but is empty* stays empty, so a
+genuine removal still surfaces. `runCatching` is what distinguishes the two.
+Persistence follows the app-access pattern: scan, diff, and save happen
+together, the saved `HighRiskSnapshot` (encrypted at rest through
+`GuardianStore`, excluded from backup, discarded on schema-version mismatch) is
+the commit point, and observations and alerts are emitted only once it is saved
+— persist-then-emit. Because the scanner already carries surfaces forward on
+failure, a fully-failed scan simply re-persists the carried-forward state and
+diffs to nothing, so there is no separate empty-scan guard.
+
+Every one of these findings is a WARNING under the alertness dial and a new
+per-source mute (`SECURITY_CHANGES`), never a lane-5 immutable rule. This is
+deliberate: each surface has a legitimate use — accessibility apps, corporate
+MDM device admins, developer or proxy CAs, third-party keyboards, personal VPNs
+— so a never-tunable CRITICAL would misfire on real users, and the copy
+therefore informs ("if you did not set this up…") rather than accuses. The
+surveillance combo stays the only immutable rule; a cross-surface spyware combo
+(one new app holding accessibility, notification access, and device admin at
+once) is a candidate future immutable rule, deliberately not added now. Two
+honest limits bound the VPN surface: a device-wide VPN is detectable but a
+normal app cannot learn which app owns it, so Mink never names one, and a
+per-app VPN that excludes Mink may be missed entirely.
+
 ## The companion
 
 `CompanionController` implements `Companion`. It manages the overlay permission,

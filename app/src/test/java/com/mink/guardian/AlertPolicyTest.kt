@@ -56,6 +56,14 @@ class AlertPolicyTest {
     }
 
     @Test
+    fun highRiskCategoryMapsToSecurityChanges() {
+        assertEquals(
+            AlertSource.SECURITY_CHANGES,
+            alertSource(alert(categoryId = HIGH_RISK_CATEGORY)),
+        )
+    }
+
+    @Test
     fun signalCategoryIdMapsToSignalChanges() {
         assertEquals(AlertSource.SIGNAL_CHANGES, alertSource(alert(categoryId = "location")))
     }
