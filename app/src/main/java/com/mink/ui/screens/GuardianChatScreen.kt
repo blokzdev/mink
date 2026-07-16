@@ -22,6 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -46,6 +47,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mink.data.MinkServices
 import com.mink.guardian.ChatMessage
 import com.mink.guardian.ChatRole
+import com.mink.guardian.GuardianTier
+import com.mink.guardian.ModelStatus
+import com.mink.ui.nav.ChatPrefill
 import kotlinx.coroutines.flow.launchIn
 
 /**
@@ -85,11 +89,21 @@ fun GuardianChatScreen(
         }
 
         val log by guardian.chatLog.collectAsStateWithLifecycle()
+        val state by guardian.state.collectAsStateWithLifecycle()
         val listState = rememberLazyListState()
         var draft by remember { mutableStateOf("") }
 
         LaunchedEffect(log.size) {
             if (log.isNotEmpty()) listState.animateScrollToItem(log.lastIndex)
+        }
+
+        // A finding card can hand us a grounded question to open with. Consume it
+        // once so a rotation does not replay the prefill, and never overwrite
+        // anything the user has already typed.
+        LaunchedEffect(Unit) {
+            val pending = ChatPrefill.draft.value
+            if (!pending.isNullOrEmpty() && draft.isEmpty()) draft = pending
+            ChatPrefill.consume()
         }
 
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
@@ -112,6 +126,12 @@ fun GuardianChatScreen(
                     items(log, key = { it.id }) { message -> MessageBubble(message) }
                 }
             }
+
+            ModelStatusStrip(
+                tier = state.tier,
+                status = state.model.status,
+                onDownload = { guardian.prepareModel() },
+            )
 
             Surface(tonalElevation = 3.dp) {
                 Row(
@@ -142,6 +162,84 @@ fun GuardianChatScreen(
                     ) {
                         Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
                     }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A slim strip above the input that tells the user what is answering. It nudges a
+ * one-tap download only when there is no usable model (absent, failed, or
+ * unsupported); while the model downloads, verifies, loads, or sits ready it
+ * simply says so; when a model is loaded it notes the on-device model; on a
+ * rules-only device it says so plainly. Never alarming — the guardian answers
+ * from rules either way.
+ */
+@Composable
+private fun ModelStatusStrip(
+    tier: GuardianTier,
+    status: ModelStatus,
+    onDownload: () -> Unit,
+) {
+    when {
+        tier == GuardianTier.RULES_ONLY -> {
+            Text(
+                "This device runs the rules guardian.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+            )
+        }
+
+        status == ModelStatus.LOADED -> {
+            Text(
+                "On-device model",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+            )
+        }
+
+        status == ModelStatus.DOWNLOADING ||
+            status == ModelStatus.VERIFYING ||
+            status == ModelStatus.LOADING -> {
+            Text(
+                "Mink is preparing its on-device model.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+            )
+        }
+
+        status == ModelStatus.READY -> {
+            Text(
+                "Mink's model is downloaded. Enable the guardian to load it.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+            )
+        }
+
+        else -> {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                tonalElevation = 1.dp,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        "Mink is answering from rules. Download the on-device model for real conversations.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
+                        modifier = Modifier.weight(1f),
+                    )
+                    Button(onClick = onDownload) { Text("Download") }
                 }
             }
         }

@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
 
@@ -34,8 +36,12 @@ data class GenParams(
 /**
  * High-level wrapper over [LlamaBridge]. All native calls run on a single
  * dedicated thread because a llama.cpp context is not safe to touch from more
- * than one thread at a time; the dispatcher serialises load, generate, and
- * unload onto that one thread.
+ * than one thread at a time. Two layers guard the shared context: the
+ * dispatcher serialises individual native calls onto that one thread, and
+ * [genMutex] serialises whole generations and load/unload so they never
+ * interleave on the shared handle and KV cache. The mutex matters because a
+ * flow suspends at emit under backpressure, which frees the thread and would
+ * otherwise let a second generation start priming the same context mid-stream.
  *
  * Every method is exception-safe. If the native bridge is absent the engine
  * simply never loads and callers fall back to the rules engine.
@@ -46,6 +52,12 @@ class LlmEngine {
         Thread(r, "mink-llm").apply { isDaemon = true }
     }
     private val dispatcher: CoroutineDispatcher = executor.asCoroutineDispatcher()
+
+    /**
+     * Held across a whole generation and across load/unload so those flows can
+     * never interleave on the shared context, even while one is suspended at emit.
+     */
+    private val genMutex = Mutex()
 
     @Volatile
     private var handle: Long = 0L
@@ -66,17 +78,19 @@ class LlmEngine {
         nThreads: Int = DEFAULT_THREADS,
         nGpuLayers: Int = 0,
     ): Boolean = withContext(dispatcher) {
-        if (!LlamaBridge.isAvailable) return@withContext false
-        if (handle != 0L) freeLocked()
-        val result = runCatching {
-            LlamaBridge.nativeInit(modelPath, nCtx, nThreads, nGpuLayers)
-        }.getOrDefault(0L)
-        handle = result
-        if (result == 0L) {
-            Log.w(TAG, "nativeInit failed for $modelPath")
-            false
-        } else {
-            true
+        genMutex.withLock {
+            if (!LlamaBridge.isAvailable) return@withLock false
+            if (handle != 0L) freeLocked()
+            val result = runCatching {
+                LlamaBridge.nativeInit(modelPath, nCtx, nThreads, nGpuLayers)
+            }.getOrDefault(0L)
+            handle = result
+            if (result == 0L) {
+                Log.w(TAG, "nativeInit failed for $modelPath")
+                false
+            } else {
+                true
+            }
         }
     }
 
@@ -86,24 +100,28 @@ class LlmEngine {
      * the model emits end of stream or [GenParams.maxTokens] is reached.
      */
     fun generate(prompt: String, params: GenParams): Flow<String> = flow {
-        if (handle == 0L || !LlamaBridge.isAvailable) return@flow
-        val primed = runCatching { LlamaBridge.nativePrompt(handle, prompt) }.getOrDefault(-1)
-        if (primed < 0) return@flow
-        var emitted = 0
-        while (emitted < params.maxTokens && currentCoroutineContext().isActive) {
-            val piece = runCatching {
-                LlamaBridge.nativeSampleToken(handle, params.temperature, params.topP)
-            }.getOrDefault("")
-            if (piece.isEmpty()) break
-            emit(piece)
-            emitted++
+        genMutex.withLock<Unit> {
+            if (handle == 0L || !LlamaBridge.isAvailable) return@withLock
+            val primed = runCatching { LlamaBridge.nativePrompt(handle, prompt) }.getOrDefault(-1)
+            if (primed < 0) return@withLock
+            var emitted = 0
+            while (emitted < params.maxTokens && currentCoroutineContext().isActive) {
+                val piece = runCatching {
+                    LlamaBridge.nativeSampleToken(handle, params.temperature, params.topP)
+                }.getOrDefault("")
+                if (piece.isEmpty()) break
+                emit(piece)
+                emitted++
+            }
+            runCatching { LlamaBridge.nativeResetContext(handle) }
         }
-        runCatching { LlamaBridge.nativeResetContext(handle) }
     }.flowOn(dispatcher)
 
     /** Release the model and context. */
     suspend fun unload() = withContext(dispatcher) {
-        freeLocked()
+        genMutex.withLock {
+            freeLocked()
+        }
     }
 
     private fun freeLocked() {

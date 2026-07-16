@@ -331,6 +331,13 @@ What has landed:
   background, never where any of it went. Lane 5 is unchanged: heavy
   background-cellular or roaming raises an ordinary tunable WARNING, not an
   immutable rule.
+- **The model-driven companion and chat**: the floating companion now speaks an
+  LLM-authored one-line remark and guardian chat answers in the model's voice,
+  each with a deterministic fallback — the alert title, and the rules engine — so
+  both behave identically on the rules-only tier. The LLM only authors text: rules
+  still pick the companion's mood and every guardian decision, the side utterance
+  persists nothing, so this is lane-6 read-path upside that writes no memory
+  (capability floor).
 
 What is designed but not built:
 

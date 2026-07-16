@@ -79,6 +79,31 @@ object CompanionDeepLink {
 }
 
 /**
+ * A tiny process-wide relay for a question the user wants to ask Mink about a
+ * specific finding. [com.mink.ui.screens.GuardianScreen] writes a grounded
+ * question from an alert card and navigates to the chat;
+ * [com.mink.ui.screens.GuardianChatScreen] reads it once on first composition
+ * into its input, then clears it so a
+ * rotation does not replay the prefill. Kept here beside [CompanionDeepLink] so
+ * neither screen needs a reference to the other.
+ */
+object ChatPrefill {
+    private val _draft = MutableStateFlow<String?>(null)
+    val draft: StateFlow<String?> = _draft.asStateFlow()
+
+    /** Offer a draft question to pre-fill the chat input; blanks are ignored. */
+    fun offer(question: String?) {
+        val trimmed = question?.trim()
+        if (!trimmed.isNullOrEmpty()) _draft.value = trimmed
+    }
+
+    /** Clear the pending draft once it has been consumed into the input. */
+    fun consume() {
+        _draft.value = null
+    }
+}
+
+/**
  * Supplied by [com.mink.ui.MinkRoot]. Screens call this to request an Android
  * runtime permission; the root's Activity Result launcher records the outcome
  * and kicks off collection for the newly unlocked category.

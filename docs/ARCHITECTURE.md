@@ -279,6 +279,41 @@ overlay in a `TYPE_APPLICATION_OVERLAY` window), and observes the guardian's
 alerts to speak the important ones. `MinkSprite` renders the retro 8-bit mink on
 a Compose canvas with per-mood animation frames.
 
+### The companion speaks
+
+The companion says something only when a finding matters, and the split is the
+whole design: **rules pick the mood, the model only writes the sentence.** Every
+fresh alert sets the sprite's mood at once through `CompanionRemark.moodForAlert`,
+a pure rule over the alert's level and category — CRITICAL and the sensor,
+high-risk, and data-use WARNINGs read as an attentive ALERT, other WARNINGs and
+suggestions as CURIOUS, INFO idles — so the animation is deterministic and never
+waits on a model. Only the one-line remark is model-authored: `composeRemark`
+builds a calm-bystander prompt (`CompanionRemark.buildRemarkPrompt`), runs it
+through the on-device engine at a short no-think budget, and passes the raw text
+through `postProcessRemark`, which drops any `<think>` span, keeps a single
+sentence, and hard-caps its length. When no model is loaded, or the call fails,
+or nothing usable comes back, the companion falls back to the alert title, so it
+always has a line to say. The model never picks the mood and never gates a finding.
+
+Which fresh alert is spoken, and when, is a separate decision made by a calm
+engine (`CompanionSpeechPolicy`): animate always, speak rarely. It burst-merges
+one sweep's batch to the single richest alert — highest severity, then longest
+body, then newest — so camera, microphone, and location arriving together become
+one remark, then a 10-second throttle and a 5-second same-key dedup keep it from
+chattering; a suppressed finding still animates, it just stays quiet. One rule
+outranks the engine: a CRITICAL flagged `fromImmutableRule` — the lane-5
+surveillance combo — bypasses throttle and dedup and always speaks, because a real
+risk is never fully muted. After five quiet minutes the sprite settles into a calm
+SLEEPING look that any remark or fresh alert wakes; alarm is carried by posture,
+never an alert badge.
+
+Guardian chat gained two calm affordances. When the device supports a model but
+none is loaded, a slim card above the input offers to download it; a loaded model
+shows a quiet on-device caption, and a rules-only device says so in one line. And
+each dashboard alert offers an "Ask Mink about this" button that seeds a grounded
+question into the chat draft through a consume-once relay — it fills the input, it
+does not send.
+
 ## The narrative
 
 `FingerprintNarrative` (`com.mink.narrative`) turns the signal snapshot into the

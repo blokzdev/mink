@@ -122,10 +122,12 @@ object MinkSpriteArt {
         "DBBWWBBBBBBWWBBD",
         "DBBBBBBBBBBBBBBD",
     )
+    // Closed, gently drooping lids so sleep reads as asleep, not as glowing eyes;
+    // distinct from the flat momentary blink and carried by the slow sleep bob.
     private val eyesSleep = listOf(
         "DBBBBBBBBBBBBBBD",
-        "DBBCCBBBBBBCCBBD",
-        "DBBBBBBBBBBBBBBD",
+        "DBBKBBBBBBBBKBBD",
+        "DBBBKKBBBBKKBBBD",
     )
 
     private fun frame(eyes: List<String>, bob: Int = 0, holdMs: Long = 420L): Frame =

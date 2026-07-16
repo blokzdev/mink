@@ -146,6 +146,15 @@ interface Guardian {
      */
     fun chat(message: String): Flow<String>
 
+    /**
+     * Compose a one-line companion remark for [alert] using the on-device model,
+     * or null to fall back to the alert title. Never throws; returns null when no
+     * model is loaded. Defaulted so other [Guardian] implementers stay
+     * source-compatible; [GuardianController] overrides it. The model only writes
+     * the sentence — it never drives the alert or the companion's mood.
+     */
+    suspend fun composeRemark(alert: GuardianAlert): String? = null
+
     fun acknowledgeAlert(id: String)
 
     /**
