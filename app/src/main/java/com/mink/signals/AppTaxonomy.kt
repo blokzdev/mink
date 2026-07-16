@@ -9,7 +9,7 @@ package com.mink.signals
  * your work, travel, finances, and hobbies. An app that can list your packages
  * can read that profile without ever asking a permission.
  */
-internal object AppTaxonomy {
+object AppTaxonomy {
 
     /** A lifestyle bucket an installed app can fall into. */
     enum class AppCategory(val label: String) {

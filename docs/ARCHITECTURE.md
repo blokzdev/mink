@@ -241,6 +241,27 @@ overlay in a `TYPE_APPLICATION_OVERLAY` window), and observes the guardian's
 alerts to speak the important ones. `MinkSprite` renders the retro 8-bit mink on
 a Compose canvas with per-mood animation frames.
 
+## The narrative
+
+`FingerprintNarrative` (`com.mink.narrative`) turns the signal snapshot into the
+readable summary the Summary screen shows — a uniqueness read, the signals that
+matter most, and a short closing note — derived on device from the store's
+snapshot, collecting nothing of its own.
+
+### The story your phone tells
+
+Alongside that summary, `StoryNarrative` derives a set of "story" cards: what the
+readings add up to about the person or the device, not what any single sensor
+reads. Six are derived — possible travel (a time zone that disagrees with the
+region setting), a paired device that carries its owner's name, a region-versus-SIM
+mismatch, how long the phone has been running, how long it has been yours (from the
+oldest installed app), and what the mix of installed apps hints at. Each is a pure,
+deterministic function over signals Mink already collects plus the app-access
+report, with the clock injected, and fires only when its real inputs are present —
+the owner card never invents a name a regex did not capture. This closes the last
+real gap against Loupe's narrative. Nothing new is read from the OS, and nothing
+leaves the device.
+
 ## Integration seam
 
 The subsystems are developed against interfaces and wired in exactly one place.

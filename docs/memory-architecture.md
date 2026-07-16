@@ -316,6 +316,10 @@ What has landed:
   mute, with no new immutable rule — deliberately, since a never-tunable
   CRITICAL would misfire (a cross-surface spyware combo is a candidate future
   immutable rule; see `HighRiskGuard`).
+- **Derived narrative on the summary**: the Summary screen gains derived
+  "story" cards (`StoryNarrative`, Loupe `FingerprintNarrative` parity), pure
+  over the existing signal snapshot and the app-access report — no new signal
+  source and no new permission, and nothing persisted (inference, not memory).
 
 What is designed but not built:
 

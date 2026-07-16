@@ -34,9 +34,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mink.data.MinkServices
+import com.mink.narrative.DeviceStoryContext
 import com.mink.narrative.FingerprintNarrative
 import com.mink.narrative.IdentifyingSignal
 import com.mink.narrative.NarrativeCard
+import com.mink.narrative.StoryCard
+import com.mink.narrative.StoryNarrative
 import com.mink.ui.components.MinkIcons
 import com.mink.ui.vm.SimpleFactory
 import com.mink.ui.vm.SummaryViewModel
@@ -44,7 +47,9 @@ import com.mink.ui.vm.SummaryViewModel
 /**
  * The fingerprint narrative: a headline uniqueness read, a supporting paragraph,
  * a set of plain-English cards, and the handful of readings that identify this
- * phone the most. Built by [FingerprintNarrative] from the current snapshot.
+ * phone the most, built by [FingerprintNarrative] from the current snapshot.
+ * Between the headline and those cards it also shows the derived "story" cards
+ * [StoryNarrative] infers from the same snapshot and the app-access report.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -53,10 +58,27 @@ fun SummaryScreen(
     onBack: () -> Unit,
 ) {
     val vm: SummaryViewModel = viewModel(factory = SimpleFactory { SummaryViewModel(services.store) })
-    LaunchedEffect(Unit) { vm.sweep() }
+    LaunchedEffect(Unit) {
+        vm.sweep()
+        services.appAccess.refresh()
+    }
 
     val snapshot by vm.signals.collectAsStateWithLifecycle()
-    val report = remember(snapshot) { FingerprintNarrative.build(snapshot) }
+    val narrative = remember(snapshot) { FingerprintNarrative.build(snapshot) }
+
+    val report by services.appAccess.report.collectAsStateWithLifecycle()
+    val story = remember(snapshot, report) {
+        val appReport = report
+        val now = System.currentTimeMillis()
+        val context = DeviceStoryContext(
+            nowMs = now,
+            earliestUserInstallMs = appReport?.apps
+                ?.filter { !it.isSystem && it.firstInstallMs in StoryNarrative.MIN_PLAUSIBLE_INSTALL_MS..now }
+                ?.minOfOrNull { it.firstInstallMs },
+            userPackageNames = appReport?.apps?.filter { !it.isSystem }?.map { it.packageName } ?: emptyList(),
+        )
+        StoryNarrative.build(snapshot, context)
+    }
 
     Scaffold(
         topBar = {
@@ -78,22 +100,34 @@ fun SummaryScreen(
             item {
                 Column {
                     Text(
-                        report.headline,
+                        narrative.headline,
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        report.detail,
+                        narrative.detail,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
                     )
                     Spacer(Modifier.height(14.dp))
-                    UniquenessMeter(report.uniquenessScore)
+                    UniquenessMeter(narrative.uniquenessScore)
                 }
             }
 
-            if (report.cards.isNotEmpty()) {
+            if (story.isNotEmpty()) {
+                item {
+                    Text(
+                        "The story your phone tells",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+                items(story, key = { it.id }) { card -> StoryCardView(card) }
+            }
+
+            if (narrative.cards.isNotEmpty()) {
                 item {
                     Text(
                         "What it adds up to",
@@ -102,10 +136,10 @@ fun SummaryScreen(
                         modifier = Modifier.padding(top = 4.dp),
                     )
                 }
-                items(report.cards, key = { it.id }) { card -> NarrativeCardView(card) }
+                items(narrative.cards, key = { it.id }) { card -> NarrativeCardView(card) }
             }
 
-            if (report.topSignals.isNotEmpty()) {
+            if (narrative.topSignals.isNotEmpty()) {
                 item {
                     Text(
                         "Most identifying readings",
@@ -114,7 +148,7 @@ fun SummaryScreen(
                         modifier = Modifier.padding(top = 8.dp),
                     )
                 }
-                items(report.topSignals, key = { it.category.id }) { top -> TopSignalView(top) }
+                items(narrative.topSignals, key = { it.category.id }) { top -> TopSignalView(top) }
             }
 
             item {
@@ -151,6 +185,32 @@ private fun UniquenessMeter(score: Int) {
 
 @Composable
 private fun NarrativeCardView(card: NarrativeCard) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(card.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                card.body,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                card.basis,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun StoryCardView(card: StoryCard) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
