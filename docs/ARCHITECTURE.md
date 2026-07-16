@@ -22,7 +22,7 @@ com.mink
 
 ## Core model
 
-Everything hangs off `SignalCategory`, an enum of 30 fingerprinting surfaces.
+Everything hangs off `SignalCategory`, an enum of 31 fingerprinting surfaces.
 Each case declares its title, subtitle, icon, `Sensitivity` tier, and (for
 gated surfaces) a `PermissionKind`. This is the Android analogue of Loupe's
 `SignalCategory` and drives the whole UI: the home list simply iterates the enum
@@ -40,7 +40,24 @@ wrapped and degraded). Time-varying surfaces (battery, location, activity) also
 implement `LiveSignalProvider.stream(): Flow<List<FingerprintSignal>>`.
 
 Providers are constructed uniformly with a `ProviderContext`. `ProviderRegistry`
-builds all 30 and asserts every category is covered exactly once.
+builds all 31 and asserts every category is covered exactly once.
+
+### Local network
+
+`LocalNetworkProvider` (`com.mink.signals`) is the one provider that looks
+outward from the phone: it browses the local Wi-Fi with `NsdManager` (multicast
+DNS / DNS-SD) for a curated set of advertised service types — Chromecast,
+AirPlay, Sonos, HomeKit, printers, file shares — and reports how many devices
+answered plus a friendly label for each. The browse needs no runtime permission
+(only the already-declared `INTERNET`); a defensive `WifiManager.MulticastLock`
+(the install-time `CHANGE_WIFI_MULTICAST_STATE`) is held for the discovery
+window and released in a `finally`. Because discovery is asynchronous and
+continuous, the provider launches its listeners in bounded waves, waits a fixed
+window, then stops every listener it started — it never leaks one, is fully
+exception-safe, and never logs a device name. The mix of devices on a home
+network is stable and often unique, which is why it fingerprints; nothing leaves
+the phone. On the emulator (no multicast) and off Wi-Fi the browse returns empty
+— expected, not an error, and reported as a count of zero.
 
 ## The store
 
@@ -325,10 +342,12 @@ snapshot, collecting nothing of its own.
 
 Alongside that summary, `StoryNarrative` derives a set of "story" cards: what the
 readings add up to about the person or the device, not what any single sensor
-reads. Six are derived — possible travel (a time zone that disagrees with the
+reads. Nine are derived — possible travel (a time zone that disagrees with the
 region setting), a paired device that carries its owner's name, a region-versus-SIM
 mismatch, how long the phone has been running, how long it has been yours (from the
-oldest installed app), and what the mix of installed apps hints at. Each is a pure,
+oldest installed app), what the mix of installed apps hints at, the languages you
+use, the accessibility settings you have on, and a formatting-versus-region
+mismatch. Each is a pure,
 deterministic function over signals Mink already collects plus the app-access
 report, with the clock injected, and fires only when its real inputs are present —
 the owner card never invents a name a regex did not capture. This closes the last

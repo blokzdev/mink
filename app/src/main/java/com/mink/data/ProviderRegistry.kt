@@ -20,6 +20,7 @@ import com.mink.signals.DisplayProvider
 import com.mink.signals.FontsProvider
 import com.mink.signals.GpuProvider
 import com.mink.signals.InstalledAppsProvider
+import com.mink.signals.LocalNetworkProvider
 import com.mink.signals.LocaleProvider
 import com.mink.signals.LocationProvider
 import com.mink.signals.MusicProvider
@@ -59,6 +60,7 @@ object ProviderRegistry {
             ClipboardProvider(ctx),
             SensorsProvider(ctx),
             NetworkProvider(ctx),
+            LocalNetworkProvider(ctx),
             FontsProvider(ctx),
             VoicesProvider(ctx),
             CpuProvider(ctx),

@@ -63,6 +63,14 @@ and on-device:
 
 - **Signals + narrative**: 30-surface fingerprint catalog at/above Loupe parity;
   derived story cards (travel, gear-owner-name, device age, app inference).
+- **Last Loupe gaps closed**: local-network mDNS/Bonjour discovery via
+  `NsdManager` (Chromecast, Sonos, printers, Apple devices — no runtime
+  permission, a defensive multicast lock), plus three narrative-only cards over
+  data already collected — languages you use, accessibility settings, and a
+  formatting-versus-region mismatch. Everything else Loupe still does is
+  genuinely iOS-only and N/A on Android (Apple Account token,
+  Keychain-survives-reinstall, Reminders, pasteboard change-counter, Lockdown
+  Mode).
 - **Behavioural watches Loupe lacks**: App Access (per-app permission holdings +
   change watch), sensor-in-use (camera/mic, no RECORD_AUDIO/CAMERA needed),
   high-risk security surfaces (accessibility, notification listeners, device

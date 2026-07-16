@@ -5,6 +5,7 @@ import com.mink.core.model.SignalCategory
 import com.mink.signals.AppTaxonomy
 import com.mink.signals.AppTaxonomy.AppCategory
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
@@ -73,6 +74,9 @@ object StoryNarrative {
         uptimeCard(snapshot),
         birthdayCard(context),
         appsCard(context),
+        languagesCard(snapshot),
+        accessibilityCard(snapshot),
+        regionSettingsCard(snapshot),
     )
 
     // ---- Cards ----
@@ -208,6 +212,103 @@ object StoryNarrative {
         AppCategory.TRAVEL -> if (count >= 2) "you may travel" else null
     }
 
+    /** More than one preferred language, whose ordered set is often unique. */
+    private fun languagesCard(snapshot: Map<SignalCategory, List<FingerprintSignal>>): StoryCard? {
+        val tags = signalOf(snapshot, SignalCategory.LOCALE, "preferredLocales")?.entries.orEmpty()
+            .map { it.label.trim() }
+            .filter { it.isNotBlank() }
+        if (tags.isEmpty()) return null
+
+        // Keyed by the primary language subtag so "en-US" and "en-GB" count once,
+        // while preserving the order the languages were listed in.
+        val names = LinkedHashMap<String, String>()
+        for (tag in tags) {
+            val primary = tag.substringBefore('-').lowercase(Locale.US)
+            if (primary.isBlank() || names.containsKey(primary)) continue
+            val display = runCatching {
+                Locale.forLanguageTag(tag).getDisplayLanguage(Locale.US)
+            }.getOrNull()?.trim()?.ifBlank { null } ?: continue
+            names[primary] = display
+        }
+        if (names.size < 2) return null
+        return StoryCard(
+            id = "languages",
+            title = "You use more than one language",
+            body = "Your preferred languages are ${oxfordJoin(names.values.toList())} — that " +
+                "ordered set is often unique to you.",
+            basis = "Read from your preferred languages.",
+        )
+    }
+
+    /** Accessibility flags you have turned on, each a distinguishing detail. */
+    private fun accessibilityCard(snapshot: Map<SignalCategory, List<FingerprintSignal>>): StoryCard? {
+        val facets = mutableListOf<String>()
+
+        if (signalOf(snapshot, SignalCategory.ACCESSIBILITY, "touchExploration")?.value?.trim() == "true") {
+            facets += "explore by touch"
+        }
+
+        val displayFlags = signalOf(snapshot, SignalCategory.ACCESSIBILITY, "displayFlags")
+        if (entryValue(displayFlags, "High contrast text")?.trim() == "true") {
+            facets += "high-contrast text"
+        }
+        if (entryValue(displayFlags, "Color inversion")?.trim() == "true") {
+            facets += "colour inversion"
+        }
+
+        val animationScales = signalOf(snapshot, SignalCategory.ACCESSIBILITY, "animationScales")
+        val customAnimation = animationScales?.entries.orEmpty().any { entry ->
+            val value = entry.value.trim()
+            value.isNotBlank() && !isDefaultScale(value)
+        }
+        if (customAnimation) facets += "reduced or custom animation"
+
+        val fontScale = signalOf(snapshot, SignalCategory.ACCESSIBILITY, "fontScale")?.value?.trim()
+        if (fontScale != null && fontScale.isNotBlank() && !isDefaultScale(fontScale)) {
+            facets += "a larger or smaller text size"
+        }
+
+        if (facets.isEmpty()) return null
+        return StoryCard(
+            id = "accessibility",
+            title = "You have accessibility settings on",
+            body = "Mink can see you use ${oxfordJoin(facets)}. Any app can read these flags with " +
+                "no prompt, and each one you change is a distinguishing detail.",
+            basis = "Read from accessibility flags any app can check.",
+        )
+    }
+
+    /** Your formatting choices that do not match your region's defaults. */
+    private fun regionSettingsCard(snapshot: Map<SignalCategory, List<FingerprintSignal>>): StoryCard? {
+        val country = localeCountry(snapshot) ?: return null
+        val regionLocale = Locale("", country)
+        val clauses = mutableListOf<String>()
+
+        // First day of week is the one facet a region's default reliably drives in
+        // pure JVM (Calendar keys it off the region). A clock 12/24-hour default
+        // comes from the language, not the country, so it cannot be derived from
+        // the region code alone without guessing — it is deliberately not compared.
+        val actualDay = signalOf(snapshot, SignalCategory.LOCALE, "firstDayOfWeek")?.value?.trim()
+            ?.ifBlank { null }
+        if (actualDay != null) {
+            val regionDay = runCatching {
+                dayName(Calendar.getInstance(regionLocale).firstDayOfWeek)
+            }.getOrNull()
+            if (regionDay != null && !actualDay.equals(regionDay, ignoreCase = true)) {
+                clauses += "your week starts on $actualDay instead of $regionDay"
+            }
+        }
+
+        if (clauses.isEmpty()) return null
+        return StoryCard(
+            id = "regionSettings",
+            title = "Your settings do not all match your region",
+            body = "Your region is ${countryName(country)}, but ${oxfordJoin(clauses)} — a small " +
+                "mismatch that itself stands out.",
+            basis = "Comparing your settings with your region's defaults.",
+        )
+    }
+
     // ---- Pure helpers ----
 
     /**
@@ -275,6 +376,27 @@ object StoryNarrative {
         1 -> items[0]
         2 -> "${items[0]} and ${items[1]}"
         else -> items.dropLast(1).joinToString(", ") + ", and ${items.last()}"
+    }
+
+    /**
+     * True when a scale string reads as the default 1.0. An unparseable value is
+     * treated as default so odd data never fabricates a "custom" setting.
+     */
+    private fun isDefaultScale(value: String): Boolean {
+        val parsed = value.trim().toFloatOrNull() ?: return true
+        return Math.abs(parsed - 1f) < 0.0001f
+    }
+
+    /** Maps a [Calendar] day-of-week constant to its name. Mirrors LocaleProvider. */
+    private fun dayName(day: Int): String = when (day) {
+        Calendar.SUNDAY -> "Sunday"
+        Calendar.MONDAY -> "Monday"
+        Calendar.TUESDAY -> "Tuesday"
+        Calendar.WEDNESDAY -> "Wednesday"
+        Calendar.THURSDAY -> "Thursday"
+        Calendar.FRIDAY -> "Friday"
+        Calendar.SATURDAY -> "Saturday"
+        else -> "day $day"
     }
 
     /** Looks up a single signal in the snapshot by its stable "<category>.<key>" id. */
