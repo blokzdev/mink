@@ -150,9 +150,9 @@ Java_com_mink_guardian_llm_LlamaBridge_nativePrompt(
     if (text == nullptr) return -1;
     const int text_len = static_cast<int>(env->GetStringUTFLength(prompt));
 
-    // Fresh prompt: clear the KV cache and position.
-    // llama_kv_self_clear is current; older tags use llama_kv_cache_clear.
-    llama_kv_self_clear(s->ctx);
+    // Fresh prompt: clear the KV cache and position. The memory API replaced
+    // llama_kv_self_clear (which itself replaced llama_kv_cache_clear).
+    llama_memory_clear(llama_get_memory(s->ctx), true);
     s->n_past = 0;
     s->utf8_pending.clear();
 
@@ -222,7 +222,7 @@ Java_com_mink_guardian_llm_LlamaBridge_nativeResetContext(
     JNIEnv * /*env*/, jobject /*thiz*/, jlong handle) {
     auto *s = reinterpret_cast<MinkSession *>(handle);
     if (s == nullptr) return;
-    llama_kv_self_clear(s->ctx);
+    llama_memory_clear(llama_get_memory(s->ctx), true);
     s->n_past = 0;
     s->utf8_pending.clear();
 }

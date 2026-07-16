@@ -41,13 +41,14 @@ class ModelManager(private val context: Context) {
     }
 
     /**
-     * Approximate published sizes for MiniCPM5-1B GGUF quants. These are only a
-     * UI progress estimate for the download bar. They are never used as a
-     * completeness gate, because the real file rarely matches the rounded figure.
+     * Published sizes of the MiniCPM5-1B GGUF quants on HuggingFace. These are
+     * only a UI progress estimate for the download bar; the real completeness
+     * gate is the server-reported content length inside [fetch], never this
+     * figure.
      */
     fun expectedSizeBytes(tier: GuardianTier): Long = when (tier) {
-        GuardianTier.FULL -> 1_320_000_000L
-        GuardianTier.LITE, GuardianTier.MINIMAL -> 820_000_000L
+        GuardianTier.FULL -> 1_153_529_216L
+        GuardianTier.LITE, GuardianTier.MINIMAL -> 688_065_920L
         GuardianTier.RULES_ONLY -> 0L
     }
 
@@ -238,9 +239,11 @@ class ModelManager(private val context: Context) {
     private fun progressOf(done: Long, total: Long): Float =
         if (total <= 0) 0f else (done.toFloat() / total.toFloat()).coerceIn(0f, 1f)
 
+    // HuggingFace resolve URLs are case-sensitive; these must match the exact
+    // filenames published in openbmb/MiniCPM5-1B-GGUF or every download 404s.
     private fun fileNameFor(tier: GuardianTier): String = when (tier) {
-        GuardianTier.FULL -> "minicpm5-1b-q8_0.gguf"
-        GuardianTier.LITE, GuardianTier.MINIMAL -> "minicpm5-1b-q4_k_m.gguf"
+        GuardianTier.FULL -> "MiniCPM5-1B-Q8_0.gguf"
+        GuardianTier.LITE, GuardianTier.MINIMAL -> "MiniCPM5-1B-Q4_K_M.gguf"
         GuardianTier.RULES_ONLY -> "none.gguf"
     }
 

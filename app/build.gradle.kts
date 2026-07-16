@@ -47,10 +47,13 @@ android {
 
     // The native bridge is optional: if the CMake toolchain / llama.cpp
     // sources are not present, the guardian falls back to the rules-only
-    // engine at runtime. Gate the C++ build on the sources existing so the
-    // Kotlin app always builds on its own.
+    // engine at runtime. Gate the C++ build on the vendored sources actually
+    // being present so the Kotlin app always builds on its own. llama.cpp is a
+    // git submodule; CI checks out without submodules, leaving an empty llama/
+    // directory, so we test for the submodule's CMakeLists.txt (its real
+    // content), not just the directory, to keep the CI build fast and native-free.
     if (file("src/main/cpp/CMakeLists.txt").exists() &&
-        file("src/main/cpp/llama").exists()
+        file("src/main/cpp/llama/CMakeLists.txt").exists()
     ) {
         externalNativeBuild {
             cmake {
