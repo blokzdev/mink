@@ -16,6 +16,11 @@
 /app/src/main/cpp/llama/
 *.gguf
 
+# Release signing — never commit the keystore or its passwords
+/keystore.properties
+*.jks
+*.keystore
+
 # OS
 .DS_Store
 
