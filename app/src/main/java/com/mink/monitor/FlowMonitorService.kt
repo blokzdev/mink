@@ -10,6 +10,10 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -28,6 +32,10 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * A DNS-only local [VpnService]. It routes *only* its sentinel DNS address
@@ -39,12 +47,16 @@ import kotlin.concurrent.thread
  *     [ConnectivityManager.getConnectionOwnerUid] (Android 10+),
  *  3. records the (app, host) pair in [DnsFlowHub], and
  *  4. forwards the query unchanged to the network's real resolver and writes the
- *     answer back, so nothing the user does breaks.
+ *     answer back, so nothing the user does breaks. The resolver is tracked live
+ *     ([watchUpstreamResolver]); only while no network has advertised one yet do
+ *     queries fall back to a public resolver ([FALLBACK_DNS]).
  *
  * It never inspects payloads, never proxies non-DNS traffic, and never sends
  * anything off-device except the same DNS queries the resolver would have sent
  * anyway. It holds the single system VPN slot while active (the unavoidable cost
- * of any VpnService) and shows an ongoing notification with a Stop action.
+ * of any VpnService) and shows an ongoing notification with a Stop action. It is
+ * also the single writer of the persisted enabled flag ([DnsFlowStore]), so what
+ * boot resume reads always reflects a transition that actually happened.
  */
 class FlowMonitorService : VpnService() {
 
@@ -54,12 +66,35 @@ class FlowMonitorService : VpnService() {
     private val writeLock = Any()
     private var out: FileOutputStream? = null
     @Volatile private var foreground = false
-    private lateinit var upstream: InetAddress
+    @Volatile private var upstream: InetAddress = InetAddress.getByName(FALLBACK_DNS)
+    private var upstreamWatcher: ConnectivityManager.NetworkCallback? = null
     private lateinit var pm: PackageManager
+
+    /**
+     * The service is the single writer of the persisted enabled flag, so it can
+     * only ever record transitions that really happened: `false` on an explicit
+     * stop command, `true` only after a tunnel is actually up. Launches from the
+     * main thread land on DataStore in call order, so a fast stop-after-start
+     * can never persist stale state. Never cancelled: a final write must land
+     * even while the service is being destroyed.
+     */
+    private val persistScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val store by lazy { DnsFlowStore(applicationContext) }
+
+    private fun persistEnabled(value: Boolean) {
+        persistScope.launch { store.saveEnabled(value) }
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            // An explicit user stop (notification action or the in-app toggle):
+            // record the choice so a reboot or app update never resurrects a
+            // monitor the user turned off. stopSelf() here also covers the case
+            // where the stop command spun up a fresh idle instance that
+            // stopEverything()'s early-return would otherwise leave started.
+            persistEnabled(false)
             stopEverything()
+            stopSelf()
             return START_NOT_STICKY
         }
         if (running) return START_STICKY
@@ -69,8 +104,17 @@ class FlowMonitorService : VpnService() {
         // Promote to foreground BEFORE establishing. The specialUse FGS type does
         // not require being the active VPN, and going foreground first satisfies
         // startForegroundService's start-within-timeout contract even when this was
-        // launched from the boot receiver (a background start).
-        startAsForeground()
+        // launched from the boot receiver (a background start). Guarded: on a
+        // START_STICKY restart the system may deny the promotion
+        // (ForegroundServiceStartNotAllowedException); fail into a clean stop
+        // rather than an uncaught crash.
+        val promoted = runCatching { startAsForeground() }
+        if (promoted.isFailure) {
+            Log.w(TAG, "foreground promotion denied; stopping: ${promoted.exceptionOrNull()}")
+            stopEverything()
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
         val pfd = runCatching {
             Builder()
@@ -99,10 +143,20 @@ class FlowMonitorService : VpnService() {
             LinkedBlockingQueue(MAX_QUEUED_QUERIES),
             ThreadPoolExecutor.DiscardPolicy(),
         )
+        watchUpstreamResolver()
         DnsFlowHub.setRunning(true)
+        DnsFlowHub.setAlwaysOn(readAlwaysOn())
+        // Only a real, established session arms boot resume — a denied consent
+        // dialog or a failed start can never leave a stale enabled=true behind.
+        persistEnabled(true)
         thread(name = "dns-flow-reader") { readLoop(pfd) }
         return START_STICKY
     }
+
+    /** Whether the system's always-on VPN setting points at Mink (API 29+, like the feature). */
+    private fun readAlwaysOn(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            runCatching { isAlwaysOn }.getOrDefault(false)
 
     /**
      * The network's own resolver, captured before we establish (afterwards ours
@@ -110,7 +164,9 @@ class FlowMonitorService : VpnService() {
      * dual-stack socket and the app-facing reply is rebuilt as IPv4 regardless —
      * so an IPv6-only network keeps using its real resolver rather than silently
      * being redirected to a public one. The public fallback is a genuine last
-     * resort for a network that advertises no resolver at all.
+     * resort for a network that advertises no resolver at all; unlike the first
+     * cut it is no longer frozen for the session — [watchUpstreamResolver] swaps
+     * in the real resolver the moment one is known.
      */
     private fun discoverUpstreamResolver(): InetAddress {
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
@@ -119,6 +175,36 @@ class FlowMonitorService : VpnService() {
         }.getOrDefault(emptyList())
         val real = servers.firstOrNull { it.hostAddress != SENTINEL_DNS }
         return real ?: InetAddress.getByName(FALLBACK_DNS)
+    }
+
+    /**
+     * Keep [upstream] pointed at the resolver the current underlying network
+     * actually chose. The one-shot discovery above can miss: a boot-resume start
+     * often runs before any network is up, and the initial network can change
+     * (wifi to cellular) mid-session. Without this, every DNS query on the device
+     * would keep flowing to the public fallback — or a dead resolver — for as
+     * long as the monitor runs, which breaks both connectivity and the promise
+     * that queries go to the network's own resolver. The request asks for real
+     * internet transports (a NetworkRequest excludes VPNs by default), so our own
+     * tunnel's sentinel never shadows the answer.
+     */
+    private fun watchUpstreamResolver() {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+                val real = linkProperties.dnsServers.firstOrNull { it.hostAddress != SENTINEL_DNS }
+                if (real != null && real != upstream) {
+                    upstream = real
+                    Log.i(TAG, "upstream resolver now ${real.hostAddress}")
+                }
+            }
+        }
+        val request = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        runCatching { cm.registerNetworkCallback(request, callback) }
+            .onSuccess { upstreamWatcher = callback }
+            .onFailure { Log.w(TAG, "resolver watcher unavailable: $it") }
     }
 
     private fun readLoop(pfd: ParcelFileDescriptor) {
@@ -233,6 +319,14 @@ class FlowMonitorService : VpnService() {
         if (!running && tunnel == null && !foreground) return
         running = false
         DnsFlowHub.setRunning(false)
+        DnsFlowHub.setAlwaysOn(false)
+        upstreamWatcher?.let { watcher ->
+            runCatching {
+                (getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager)
+                    ?.unregisterNetworkCallback(watcher)
+            }
+        }
+        upstreamWatcher = null
         runCatching { forwarders?.shutdownNow() }
         forwarders = null
         synchronized(writeLock) { runCatching { out?.close() }; out = null }

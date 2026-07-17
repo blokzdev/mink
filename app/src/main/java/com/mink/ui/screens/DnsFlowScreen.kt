@@ -76,6 +76,7 @@ fun DnsFlowScreen(
         val context = LocalContext.current
         val report by monitor.report.collectAsStateWithLifecycle()
         val running by monitor.running.collectAsStateWithLifecycle()
+        val alwaysOn by monitor.alwaysOn.collectAsStateWithLifecycle()
         val trackers = remember { TrackerList.load(context) }
 
         val consentLauncher = rememberLauncherForActivityResult(
@@ -100,7 +101,11 @@ fun DnsFlowScreen(
             } else {
                 item {
                     if (running) {
-                        RunningCard(onStop = { monitor.stop() }, onClear = { monitor.clear() })
+                        RunningCard(
+                            alwaysOn = alwaysOn,
+                            onStop = { monitor.stop() },
+                            onClear = { monitor.clear() },
+                        )
                     } else {
                         OptInCard(onEnable = enable, privateDnsActive = privateDnsActive(context))
                     }
@@ -184,7 +189,7 @@ private fun OptInCard(onEnable: () -> Unit, privateDnsActive: Boolean) {
 }
 
 @Composable
-private fun RunningCard(onStop: () -> Unit, onClear: () -> Unit) {
+private fun RunningCard(alwaysOn: Boolean, onStop: () -> Unit, onClear: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
@@ -199,13 +204,22 @@ private fun RunningCard(onStop: () -> Unit, onClear: () -> Unit) {
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                "Mink is noting which servers your apps look up. Stop any time to release the VPN.",
+                if (alwaysOn) {
+                    "Mink is noting which servers your apps look up. Always-on VPN is set for " +
+                        "Mink, so Android restarts the monitor if it stops — to turn it off, " +
+                        "remove always-on in your system VPN settings."
+                } else {
+                    "Mink is noting which servers your apps look up. Stop any time to release " +
+                        "the VPN."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
             )
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onStop) { Text("Stop") }
+                if (!alwaysOn) {
+                    OutlinedButton(onClick = onStop) { Text("Stop") }
+                }
                 TextButton(onClick = onClear) { Text("Clear list") }
             }
         }

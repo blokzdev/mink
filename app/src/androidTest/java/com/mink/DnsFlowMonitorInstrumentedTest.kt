@@ -4,12 +4,16 @@ import android.content.Context
 import android.os.Build
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.mink.monitor.DNS_ROLLUP_SCHEMA_VERSION
 import com.mink.monitor.DnsFlowHub
 import com.mink.monitor.DnsFlowMonitor
 import com.mink.monitor.DnsFlowStore
+import com.mink.monitor.DnsRollupSnapshot
+import com.mink.monitor.FlowMonitorService
 import com.mink.monitor.TrackerList
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -53,9 +57,19 @@ class DnsFlowMonitorInstrumentedTest {
     }
 
     @Test
-    fun clearOnMonitorIsSafeWhenEmpty() {
+    fun clearOnMonitorIsSafeWhenEmpty() = runBlocking {
+        // Wipe the persisted rollup first: construction restores it into the
+        // process-global hub asynchronously, so a stale snapshot on the device
+        // could otherwise re-seed the hub after clear() and flake the assert.
+        DnsFlowStore(context).save(DnsRollupSnapshot(DNS_ROLLUP_SCHEMA_VERSION, emptyList()))
         val monitor = DnsFlowMonitor(context, scope)
         monitor.clear()
+        // With the store empty, any in-flight restore seeds nothing, so the hub
+        // settles empty; poll briefly rather than race the init coroutine.
+        val deadline = System.currentTimeMillis() + 3_000
+        while (monitor.report.value.lookups.isNotEmpty() && System.currentTimeMillis() < deadline) {
+            delay(50)
+        }
         assertTrue(monitor.report.value.lookups.isEmpty())
     }
 
@@ -76,7 +90,28 @@ class DnsFlowMonitorInstrumentedTest {
         assertTrue(list.isTracker("ads.g.doubleclick.net"))         // subdomain
         assertTrue(list.isTracker("adnxs.com"))                     // a PR-3 addition
         assertTrue(list.isTracker("clarity.ms"))                    // a PR-3 addition
+        assertTrue(list.isTracker("r.lr-ingest.io"))                // LogRocket's real ingest domain
         assertFalse(list.isTracker("example.com"))
         assertFalse(list.isTracker("unity3d.com"))                  // the over-broad entry we removed
+        assertFalse(list.isTracker("blog.logrocket.com"))           // first-party content, not capture
+    }
+
+    @Test
+    fun stopCommandPersistsEnabledFalse() = runBlocking {
+        // The service is the single writer of the enabled flag; an explicit stop
+        // command must record enabled=false even when no session is running, so a
+        // reboot or app update can never resurrect a monitor the user stopped.
+        // (The ACTION_STOP path never touches the VPN, so no consent is needed.)
+        val store = DnsFlowStore(context)
+        store.saveEnabled(true)
+        assertTrue(store.loadEnabled())
+
+        FlowMonitorService.stop(context)
+
+        val deadline = System.currentTimeMillis() + 5_000
+        while (store.loadEnabled() && System.currentTimeMillis() < deadline) {
+            delay(100)
+        }
+        assertFalse(store.loadEnabled())
     }
 }

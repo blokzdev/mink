@@ -40,7 +40,6 @@ mparticle.com
 
 # --- Analytics platforms ---
 amplitude.com
-api.amplitude.com
 mixpanel.com
 api.mixpanel.com
 segment.com
@@ -168,14 +167,17 @@ pixel.reddit.com
 bat.bing.com
 
 # --- Session replay / product analytics ---
+# LogRocket's capture/SDK traffic lives on logrocket.io + the lr-* ingest
+# domains; logrocket.com itself hosts their (widely read) blog, docs, and
+# dashboard, so listing it would flag ordinary browsing.
 clarity.ms
 mouseflow.com
 inspectlet.com
-logrocket.com
+logrocket.io
+lr-ingest.io
+lr-in.com
 smartlook.com
 contentsquare.net
-api2.amplitude.com
-cdn.segment.com
 
 # --- Push / engagement SDKs (China + global) ---
 getui.com
