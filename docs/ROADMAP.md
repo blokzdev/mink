@@ -31,13 +31,16 @@ guide, not a contract — reorder freely.
   each lookup, forwards it unchanged, and shows a live `(app → host)` list —
   in-memory only, no alerts. Costs are real and disclosed: it holds the single
   VPN slot (replaces any other VPN) and shows the key icon. Follow-ups:
-  - **PR-2:** encrypted-DataStore `(app, host)` rollup with retention + debounced
-    flush (**no SQLCipher** — the rollup fits the existing Keystore/DataStore
-    path; a native DB is only revisited if raw per-connection time-series is ever
-    proven necessary), bundled known-tracker classification, an `AlertSource` +
-    a tunable `FlowGuard` finding (no lane-5 immutable).
-  - **PR-3:** onboarding/settings polish, boot-restart, real-device coverage
-    measurement (how much DNS is plaintext under a normal user's config).
+  - **PR-2 (done):** encrypted-DataStore `(app, host)` rollup with retention +
+    debounced flush (**no SQLCipher** — a dedicated `DnsFlowStore` reusing the
+    Keystore cipher; history survives restart and shows when the monitor is off),
+    bundled known-tracker classification (`TrackerList`, tagged in the UI), and
+    `AlertSource.DNS_FLOW` + a tunable, quiet `DnsFlowGuard` insight (a user app
+    that looked up several known trackers → `SUGGESTION`, once per app per run,
+    no lane-5 immutable).
+  - **PR-3 (open):** onboarding/settings polish, boot-restart, real-device
+    coverage measurement (how much DNS is plaintext under a normal user's
+    config), and a larger/updatable tracker list.
   (`NetworkStatsManager` data-use, already shipped, is the always-on volumes-only
   view; this is the opt-in per-destination complement.)
 

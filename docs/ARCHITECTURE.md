@@ -317,9 +317,26 @@ on. Because Mink itself then holds the VPN, `HighRiskScanner.readVpnActive`
 returns false while the monitor runs, so the guardian never flags Mink's own VPN
 as a suspicious third-party one. Coverage is honest about its limits: queries
 that use Private DNS (DoT) or a browser's own DoH bypass the plaintext lookup and
-are not seen. In this first cut the observations are in-memory only; persistence,
-known-tracker classification, and a guardian finding are deliberately deferred to
-later, keeping the capability floor — rules will decide, never the model.
+are not seen.
+
+The rollup is persisted so history survives a restart. `DnsFlowStore` keeps a
+schema-versioned, retention-pruned (`(app, host)`) snapshot in its own DataStore,
+encrypted with the same Keystore AES-GCM cipher as the rest of Mink — no SQLite
+or native database dependency; the rollup is small and rewritten as one blob,
+debounced so a burst of lookups is a single write. `DnsFlowMonitor` restores it
+into the hub at startup (so the Network activity screen shows recent history even
+while the monitor is off) and autosaves changes thereafter.
+
+`TrackerList` classifies each host against a bundled, offline list of well-known
+advertising and analytics domains (a host matches on an exact or parent-domain
+hit), and the screen tags those rows. On the guardian side, `DnsFlowGuard`
+(`analyzeDnsFlows`) turns "a user app that looked up several known trackers" into
+a quiet `SUGGESTION` — an insight, never a `CRITICAL`, never an immutable rule,
+raised at most once per app per run. It fires only while the monitor is on and
+only during a sweep, folding into the same notification gate as every other
+finding, so the alertness dial and per-source mute (`AlertSource.DNS_FLOW`) apply.
+The capability floor holds throughout: the tracker list and thresholds are
+deterministic and tunable — rules decide, the model never authors the scaffolding.
 
 ## The companion
 

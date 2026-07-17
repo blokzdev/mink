@@ -6,6 +6,7 @@ enum class AlertSource(val label: String) {
     SENSOR_USE("Sensor use"),
     SECURITY_CHANGES("Security settings"),
     DATA_USE("Data use"),
+    DNS_FLOW("Network activity"),
     SIGNAL_CHANGES("Signal changes"),
     EXPOSURE_INSIGHTS("Exposure insights"),
 }
@@ -17,6 +18,7 @@ fun alertSource(alert: GuardianAlert): AlertSource = when {
     alert.categoryId == SENSOR_USE_CATEGORY -> AlertSource.SENSOR_USE
     alert.categoryId == HIGH_RISK_CATEGORY -> AlertSource.SECURITY_CHANGES
     alert.categoryId == DATA_USE_CATEGORY -> AlertSource.DATA_USE
+    alert.categoryId == DNS_FLOW_CATEGORY -> AlertSource.DNS_FLOW
     else -> AlertSource.SIGNAL_CHANGES
 }
 

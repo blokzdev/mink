@@ -1,0 +1,124 @@
+# Known tracker / analytics / ad / attribution domains, one registrable domain
+# per line. Bundled and matched on-device; a host matches if it equals one of
+# these or is a subdomain of one. Curated from widely recognised advertising,
+# analytics, and mobile-attribution SDKs. Lines starting with # are comments.
+# This list is intentionally conservative — well-known trackers only — so a
+# match is meaningful and not a false alarm.
+
+# --- Google advertising / analytics ---
+doubleclick.net
+google-analytics.com
+googleadservices.com
+googlesyndication.com
+googletagmanager.com
+googletagservices.com
+app-measurement.com
+admob.com
+admob.google.com
+firebase-settings.crashlytics.com
+crashlytics.com
+
+# --- Meta / Facebook ---
+graph.facebook.com
+connect.facebook.net
+an.facebook.com
+
+# --- Mobile attribution / measurement SDKs ---
+adjust.com
+adjust.io
+app.adjust.com
+appsflyer.com
+apps-flyer.com
+appsflyersdk.com
+branch.io
+app.link
+kochava.com
+singular.net
+tenjin.com
+tune.com
+mparticle.com
+
+# --- Analytics platforms ---
+amplitude.com
+api.amplitude.com
+mixpanel.com
+api.mixpanel.com
+segment.com
+segment.io
+api.segment.io
+flurry.com
+data.flurry.com
+localytics.com
+heapanalytics.com
+fullstory.com
+hotjar.com
+matomo.cloud
+quantserve.com
+scorecardresearch.com
+sensorsdata.cn
+umeng.com
+umengcloud.com
+talkingdata.com
+
+# --- Ad networks / exchanges ---
+adcolony.com
+applovin.com
+ms.applovin.com
+unityads.unity3d.com
+ironsrc.com
+ironsource.mobi
+supersonicads.com
+vungle.com
+api.vungle.com
+inmobi.com
+chartboost.com
+live.chartboost.com
+mopub.com
+pubmatic.com
+rubiconproject.com
+criteo.com
+criteo.net
+taboola.com
+outbrain.com
+smaato.net
+mgid.com
+adtapsy.com
+startappservice.com
+startappexchange.com
+mobfox.com
+tapjoy.com
+static.tapjoy.com
+fyber.com
+smartadserver.com
+casalemedia.com
+bidswitch.net
+adsrvr.org
+33across.com
+openx.net
+yieldmo.com
+teads.tv
+moatads.com
+adsafeprotected.com
+adtelligent.com
+
+# --- Push / engagement / other telemetry ---
+onesignal.com
+api.onesignal.com
+braze.com
+appboy.com
+sdk.iad-01.braze.com
+urbanairship.com
+airship.com
+leanplum.com
+clevertap.com
+wzrkt.com
+swrve.com
+batch.com
+
+# --- Bytedance / TikTok (analytics/ad endpoints only, not the core app backend) ---
+analytics.tiktok.com
+ads.tiktok.com
+
+# --- Yandex ---
+appmetrica.yandex.net
+mc.yandex.ru
