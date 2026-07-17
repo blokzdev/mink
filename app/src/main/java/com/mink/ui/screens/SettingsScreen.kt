@@ -78,7 +78,12 @@ fun SettingsScreen(
                 }
             }
 
-            item { NetworkActivitySection(onOpen = onOpenNetworkActivity) }
+            item {
+                NetworkActivitySection(
+                    supported = services.dnsFlow.isSupported,
+                    onOpen = onOpenNetworkActivity,
+                )
+            }
 
             item {
                 LinkRow("Permissions", "What Mink can and cannot read", onOpenPermissions)
@@ -96,7 +101,7 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun NetworkActivitySection(onOpen: () -> Unit) {
+private fun NetworkActivitySection(supported: Boolean, onOpen: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen),
         shape = RoundedCornerShape(14.dp),
@@ -111,9 +116,19 @@ private fun NetworkActivitySection(onOpen: () -> Unit) {
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                "The opt-in monitor stays on until you stop it, and Mink tries to resume it after " +
-                    "a restart. To keep it running reliably across every reboot, set Mink as an " +
-                    "always-on VPN in your system settings (Network and internet, VPN).",
+                if (supported) {
+                    // Honest about the two ways the monitor can end without the user
+                    // stopping it, and about what always-on takes away in exchange.
+                    "The opt-in monitor runs until you stop it or another app takes the " +
+                        "VPN slot, and Mink tries to resume it after a restart. For a resume " +
+                        "across every reboot, set Mink as an always-on VPN in your system " +
+                        "settings (Network and internet, VPN) — note that Android then " +
+                        "restarts the monitor even after you tap Stop, so you would turn it " +
+                        "off from that same screen."
+                } else {
+                    "Per-app network activity needs Android 10 or newer, so the monitor is " +
+                        "unavailable on this device."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
             )

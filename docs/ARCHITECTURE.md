@@ -304,9 +304,13 @@ attributes it to the requesting app with `ConnectivityManager.getConnectionOwner
 confirmed this returns the real requesting app, not the system resolver), records
 the `(app, host)` pair in the process-global `DnsFlowHub`, then forwards the query
 unchanged to the network's real resolver and writes the answer back so nothing
-breaks. Pure byte-level parsing and response synthesis (IPv4/UDP, the DNS QNAME,
-the IPv4 header checksum) live in `DnsFlow.kt` and are unit-tested; the service is
-the Android glue.
+breaks. The resolver is tracked live through a `ConnectivityManager` network
+callback, so a session that starts before any network is up (a boot resume) or
+that outlives a wifi-to-cellular switch keeps forwarding to the resolver the
+current network actually chose — the public fallback serves only the window in
+which no network has advertised one. Pure byte-level parsing and response
+synthesis (IPv4/UDP, the DNS QNAME, the IPv4 header checksum) live in
+`DnsFlow.kt` and are unit-tested; the service is the Android glue.
 
 The rails are explicit. It never inspects payloads and never proxies non-DNS
 traffic — it sees the names an app looks up, the same queries the resolver would
@@ -341,11 +345,19 @@ model never authors the scaffolding.
 
 The monitor remembers whether it was on (`DnsFlowStore` keeps a small `enabled`
 flag beside the rollup), and a `BootReceiver` resumes it after a reboot or an app
-update — best-effort, only when the VPN consent still stands and the flag is set.
-For a guaranteed resume across every boot, the Settings screen points the user at
-Android's own always-on VPN toggle. Because the monitor may be started from that
-background boot context, `FlowMonitorService.start` uses `startForegroundService`
-and the service promotes itself to the foreground before establishing the tunnel.
+update — best-effort, only when the VPN consent *definitively* still stands (an
+indeterminate consent check fails closed) and the flag is set. The service is the
+single writer of that flag: `false` on any explicit stop command — including the
+ongoing notification's Stop action — and `true` only once a tunnel is really up,
+so a stop from anywhere sticks across reboots and a denied consent dialog can
+never arm a resume. For a guaranteed resume across every boot, the Settings
+screen points the user at Android's own always-on VPN toggle, and says what that
+trades away: the system then restarts the monitor even after an in-app Stop, so
+the off switch moves to system settings (the running screen detects always-on and
+says the same). Because the monitor may be started from that background boot
+context, `FlowMonitorService.start` uses `startForegroundService` and the service
+promotes itself to the foreground before establishing the tunnel; a denied
+promotion fails into a clean stop instead of a crash.
 
 A shared **Settings** screen (a gear on the home bar) gathers the alertness dial
 and per-source mutes — the same control as on the guardian dashboard, extracted

@@ -27,6 +27,15 @@ object DnsFlowHub {
     private val _running = MutableStateFlow(false)
     val running: StateFlow<Boolean> = _running.asStateFlow()
 
+    private val _alwaysOn = MutableStateFlow(false)
+
+    /**
+     * Whether the running session is under the system's always-on VPN setting —
+     * in that mode Android restarts the monitor after any stop, so the UI must
+     * say the off switch lives in system settings, not over-promise its own.
+     */
+    val alwaysOn: StateFlow<Boolean> = _alwaysOn.asStateFlow()
+
     private data class Key(val uid: Int, val host: String)
 
     /** Called by the service on each observed DNS query. Upserts and republishes. */
@@ -73,6 +82,11 @@ object DnsFlowHub {
     /** The service reports its own lifecycle so the UI and the VPN self-check follow it. */
     fun setRunning(running: Boolean) {
         _running.value = running
+    }
+
+    /** The service reports whether the session runs under system always-on VPN. */
+    fun setAlwaysOn(alwaysOn: Boolean) {
+        _alwaysOn.value = alwaysOn
     }
 
     /** Forget everything observed (user-invoked from the screen). */

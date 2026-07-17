@@ -50,18 +50,24 @@ class DnsFlowMonitor(
     /** Whether the VPN monitor is currently active. */
     val running: StateFlow<Boolean> get() = DnsFlowHub.running
 
+    /** Whether the running session is held open by the system's always-on VPN setting. */
+    val alwaysOn: StateFlow<Boolean> get() = DnsFlowHub.alwaysOn
+
     /** Per-app DNS attribution needs API 29+; below that the feature is unavailable. */
     val isSupported: Boolean get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
 
+    // The persisted enabled flag is written by FlowMonitorService alone (false on
+    // an explicit stop command, true once a tunnel is really up), so these just
+    // drive the service: no second writer, no ordering races, and a denied
+    // consent dialog can never arm boot resume.
+
     /** Start capture. VPN consent must already be granted by the caller. */
     fun start() {
-        scope.launch { runCatching { store.saveEnabled(true) } }
         FlowMonitorService.start(appContext)
     }
 
     /** Stop capture and release the VPN slot. */
     fun stop() {
-        scope.launch { runCatching { store.saveEnabled(false) } }
         FlowMonitorService.stop(appContext)
     }
 

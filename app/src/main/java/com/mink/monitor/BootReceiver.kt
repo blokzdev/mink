@@ -16,7 +16,9 @@ import kotlinx.coroutines.launch
  * best-effort: `VpnService.prepare` returns null only while consent persists, and
  * some Android versions / OEMs restrict starting a foreground service from a boot
  * broadcast. For a guaranteed resume the user can mark Mink as an always-on VPN
- * in system settings; this receiver just restores the common case.
+ * in system settings (with the trade-off that the system then also restarts the
+ * monitor after an in-app Stop — the off switch moves to that same settings
+ * screen); this receiver just restores the common case.
  */
 class BootReceiver : BroadcastReceiver() {
 
@@ -25,8 +27,11 @@ class BootReceiver : BroadcastReceiver() {
         if (action != Intent.ACTION_BOOT_COMPLETED && action != Intent.ACTION_MY_PACKAGE_REPLACED) return
         // Per-app attribution (and thus the whole feature) needs API 29+.
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
-        // Consent must still be granted; if it is not, do nothing (never prompt at boot).
-        if (runCatching { VpnService.prepare(context) }.getOrNull() != null) return
+        // Consent must definitively still stand. Fail closed: prepare() can throw
+        // (e.g. VPN lockdown mode), and an indeterminate consent check must read
+        // as "no" — never start the monitor on a maybe, never prompt at boot.
+        val consentStands = runCatching { VpnService.prepare(context) == null }.getOrDefault(false)
+        if (!consentStands) return
 
         val app = context.applicationContext
         val pending = goAsync()
