@@ -142,6 +142,11 @@ class HighRiskScanner(private val appContext: Context) {
     }
 
     private fun readVpnActive(): Boolean {
+        // Mink's own DNS-flow monitor holds the single VPN slot while it runs.
+        // A normal app cannot learn which app owns the active VPN, but since only
+        // one VPN can be active at a time, if ours is running it IS the one on the
+        // transport, so we must not flag it as a suspicious third-party VPN.
+        if (DnsFlowHub.running.value) return false
         val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             ?: return false
         val active = cm.activeNetwork ?: return false

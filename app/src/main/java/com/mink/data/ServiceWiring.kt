@@ -4,6 +4,7 @@ import android.content.Context
 import com.mink.companion.Companion
 import com.mink.guardian.Guardian
 import com.mink.monitor.AppAccessMonitor
+import com.mink.monitor.DnsFlowMonitor
 import com.mink.monitor.NetworkUsageMonitor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -39,9 +40,10 @@ object ServiceWiring {
             runCatching { companionFactory?.invoke(appContext, g, appScope) }.getOrNull()
         }
 
-        // App access and data use are independent of guardian/companion and cannot fail to construct.
+        // App access, data use, and DNS flow are independent of guardian/companion and cannot fail to construct.
         val appAccess = AppAccessMonitor(appContext, appScope)
         val networkUsage = NetworkUsageMonitor(appContext, appScope)
+        val dnsFlow = DnsFlowMonitor(appContext)
 
         return MinkServices(
             store = store,
@@ -51,6 +53,7 @@ object ServiceWiring {
             companion = companion,
             appAccess = appAccess,
             networkUsage = networkUsage,
+            dnsFlow = dnsFlow,
         )
     }
 

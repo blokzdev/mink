@@ -253,10 +253,10 @@ per-app VPN that excludes Mink may be missed entirely.
 ### Data use
 
 `NetworkUsageScanner` (`com.mink.monitor`) is the guardian's per-app
-data-volume awareness, and the deliberate alternative to a `VpnService` flow
-attribution: rather than intercept traffic to learn destinations, it reads how
-*much* each app moved from `NetworkStatsManager` and never learns where any of
-it went. Each scan queries per-uid summaries over two passes — `TYPE_WIFI` then
+data-volume awareness — the always-on, volumes-only complement to the opt-in
+Network activity monitor below: rather than intercept traffic to learn
+destinations, it reads how *much* each app moved from `NetworkStatsManager` and
+never learns where any of it went. Each scan queries per-uid summaries over two passes — `TYPE_WIFI` then
 `TYPE_MOBILE` — accumulates rx+tx per uid, splits the cellular total into its
 roaming and background (`STATE_DEFAULT`) subsets, then resolves each uid to a
 labelled app through `PackageManager`. The read runs off the main thread and the
@@ -281,12 +281,45 @@ expected. The **Data use** screen (`ui/screens/NetworkUsageScreen.kt`) shows the
 top apps by total over the last week, each split into cellular, Wi-Fi, roaming,
 and background.
 
-The honesty limit is hard and load-bearing: this is volumes only. Android does
-not reveal to a normal app which servers or hosts an app talked to, so no copy
-anywhere — finding, alert, or screen — implies a destination, an exfiltration
-target, or "where your data went". Background is the platform's coarse per-uid
-state counter, reported as "in the background", never as a claim about what the
-owner was doing while it ran.
+The honesty limit is hard and load-bearing: the Data use screen is volumes only.
+`NetworkStatsManager` does not reveal which servers or hosts an app talked to, so
+no copy on that screen — finding, alert, or screen — implies a destination, an
+exfiltration target, or "where your data went". Background is the platform's
+coarse per-uid state counter, reported as "in the background", never as a claim
+about what the owner was doing while it ran. The one place destinations *are*
+visible is the separate, opt-in Network activity monitor below — and only the
+names an app resolves, never the traffic itself.
+
+### Network activity (DNS flow)
+
+`FlowMonitorService` (`com.mink.monitor`) is the one monitor that looks at where
+apps reach, and it is deliberately the most guarded thing Mink does: strictly
+opt-in, off by default, and behind an explicit consent screen. It is a
+**DNS-only** local `VpnService`. Rather than tunnel all traffic, it hands apps a
+sentinel resolver address and routes *only that address* (`/32`) into the tunnel;
+every other packet the device sends bypasses Mink entirely, so connectivity and
+battery are barely touched. For each DNS query it reads the requested host name,
+attributes it to the requesting app with `ConnectivityManager.getConnectionOwnerUid`
+(Android 10+, which is why the feature is gated to API 29+ — an on-device probe
+confirmed this returns the real requesting app, not the system resolver), records
+the `(app, host)` pair in the process-global `DnsFlowHub`, then forwards the query
+unchanged to the network's real resolver and writes the answer back so nothing
+breaks. Pure byte-level parsing and response synthesis (IPv4/UDP, the DNS QNAME,
+the IPv4 header checksum) live in `DnsFlow.kt` and are unit-tested; the service is
+the Android glue.
+
+The rails are explicit. It never inspects payloads and never proxies non-DNS
+traffic — it sees the names an app looks up, the same queries the resolver would
+send anyway, and nothing leaves the device. It holds the single system VPN slot
+while active (so it replaces any other VPN — an unavoidable cost of any
+`VpnService`) and says so, with the status-bar key icon, before the user turns it
+on. Because Mink itself then holds the VPN, `HighRiskScanner.readVpnActive`
+returns false while the monitor runs, so the guardian never flags Mink's own VPN
+as a suspicious third-party one. Coverage is honest about its limits: queries
+that use Private DNS (DoT) or a browser's own DoH bypass the plaintext lookup and
+are not seen. In this first cut the observations are in-memory only; persistence,
+known-tracker classification, and a guardian finding are deliberately deferred to
+later, keeping the capability floor — rules will decide, never the model.
 
 ## The companion
 

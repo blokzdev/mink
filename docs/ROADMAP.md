@@ -23,14 +23,23 @@ guide, not a contract — reorder freely.
   - Onboarding + permissions UX scrutiny on a real device.
 
 ### More capability
-- **VpnService per-app network-flow attribution** (the deferred deep-monitor).
-  Which app talks to which servers, NetGuard-style, no root. Biggest remaining
-  capability, but carries real costs: it occupies the single VPN slot, needs a
-  persistent VPN foreground service with the always-visible key icon, and its
-  flow log is the first data volume that wants SQLite — forcing the
-  **SQLCipher-vs-keep-zero-native-deps decision.** Ask before starting.
-  (`NetworkStatsManager` data-use, already shipped, is the honest volumes-only
-  80%; this is the per-destination remainder.)
+- **Network activity (DNS-flow) monitor — in progress.** An on-device probe
+  (2026-07-16) refuted the assumed blocker: no-root per-app `(app → domain)`
+  attribution *works* on Android 10+ (`getConnectionOwnerUid` returns the real
+  requesting app, not the system resolver). PR-1 ships the opt-in, off-by-default
+  DNS-only `VpnService`: it routes only its sentinel resolver `/32`, attributes
+  each lookup, forwards it unchanged, and shows a live `(app → host)` list —
+  in-memory only, no alerts. Costs are real and disclosed: it holds the single
+  VPN slot (replaces any other VPN) and shows the key icon. Follow-ups:
+  - **PR-2:** encrypted-DataStore `(app, host)` rollup with retention + debounced
+    flush (**no SQLCipher** — the rollup fits the existing Keystore/DataStore
+    path; a native DB is only revisited if raw per-connection time-series is ever
+    proven necessary), bundled known-tracker classification, an `AlertSource` +
+    a tunable `FlowGuard` finding (no lane-5 immutable).
+  - **PR-3:** onboarding/settings polish, boot-restart, real-device coverage
+    measurement (how much DNS is plaintext under a normal user's config).
+  (`NetworkStatsManager` data-use, already shipped, is the always-on volumes-only
+  view; this is the opt-in per-destination complement.)
 
 ### Depth / "learns and evolves"
 - **Guardian-core refactor + four-mode routing.** Split `guardian-core` from the

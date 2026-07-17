@@ -17,6 +17,7 @@ import com.mink.ui.screens.AboutScreen
 import com.mink.ui.screens.AppAccessScreen
 import com.mink.ui.screens.CategoryDetailScreen
 import com.mink.ui.screens.CompanionScreen
+import com.mink.ui.screens.DnsFlowScreen
 import com.mink.ui.screens.ExportScreen
 import com.mink.ui.screens.GuardianChatScreen
 import com.mink.ui.screens.GuardianScreen
@@ -42,6 +43,7 @@ object MinkRoute {
     const val APP_ACCESS = "app_access"
     const val WATCHED_APPS = "watched_apps"
     const val NETWORK_USAGE = "network_usage"
+    const val DNS_FLOW = "dns_flow"
 
     fun category(category: SignalCategory): String = "category/${category.id}"
 
@@ -49,7 +51,7 @@ object MinkRoute {
     private val deepLinkable =
         setOf(
             HOME, GUARDIAN, COMPANION, SUMMARY, ABOUT, EXPORT, PERMISSIONS, APP_ACCESS,
-            WATCHED_APPS, NETWORK_USAGE,
+            WATCHED_APPS, NETWORK_USAGE, DNS_FLOW,
         )
 
     /** Whether [route] is a known, parameterless destination we can navigate to. */
@@ -198,6 +200,13 @@ fun MinkNavHost(
 
         composable(MinkRoute.NETWORK_USAGE) {
             NetworkUsageScreen(
+                services = services,
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(MinkRoute.DNS_FLOW) {
+            DnsFlowScreen(
                 services = services,
                 onBack = { navController.popBackStack() },
             )
