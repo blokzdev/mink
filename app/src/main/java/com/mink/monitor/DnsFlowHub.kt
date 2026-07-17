@@ -54,6 +54,22 @@ object DnsFlowHub {
         publish(nowMs)
     }
 
+    /**
+     * Restore persisted lookups at startup. Existing in-memory entries win (a live
+     * session is fresher than the last save), so this only fills gaps. Publishes
+     * once so the screen shows history immediately.
+     */
+    fun seed(restored: List<DnsLookup>) {
+        if (restored.isEmpty()) return
+        var latest = _report.value.generatedAtMs
+        for (e in restored) {
+            lookups.putIfAbsent(Key(e.uid, e.host), e)
+            if (e.lastSeenMs > latest) latest = e.lastSeenMs
+        }
+        evictIfNeeded()
+        publish(latest)
+    }
+
     /** The service reports its own lifecycle so the UI and the VPN self-check follow it. */
     fun setRunning(running: Boolean) {
         _running.value = running

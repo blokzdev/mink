@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,6 +35,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -42,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mink.data.MinkServices
 import com.mink.monitor.DnsLookup
+import com.mink.monitor.TrackerList
 
 /**
  * The Network activity screen: which servers each app looks up, attributed on
@@ -73,6 +76,7 @@ fun DnsFlowScreen(
         val context = LocalContext.current
         val report by monitor.report.collectAsStateWithLifecycle()
         val running by monitor.running.collectAsStateWithLifecycle()
+        val trackers = remember { TrackerList.load(context) }
 
         val consentLauncher = rememberLauncherForActivityResult(
             ActivityResultContracts.StartActivityForResult(),
@@ -91,17 +95,26 @@ fun DnsFlowScreen(
         ) {
             item { IntroLine() }
 
-            when {
-                !monitor.isSupported -> item { UnsupportedCard() }
-                !running -> item { OptInCard(onEnable = enable, privateDnsActive = privateDnsActive(context)) }
-                else -> {
-                    item { RunningCard(onStop = { monitor.stop() }, onClear = { monitor.clear() }) }
-                    val lookups = report.lookups
-                    if (lookups.isEmpty()) {
-                        item { WaitingLine() }
+            if (!monitor.isSupported) {
+                item { UnsupportedCard() }
+            } else {
+                item {
+                    if (running) {
+                        RunningCard(onStop = { monitor.stop() }, onClear = { monitor.clear() })
                     } else {
-                        items(lookups, key = { "${it.uid}:${it.host}" }) { LookupRow(it) }
+                        OptInCard(onEnable = enable, privateDnsActive = privateDnsActive(context))
                     }
+                }
+                val lookups = report.lookups
+                when {
+                    lookups.isNotEmpty() -> {
+                        // Persisted history stays visible even when the monitor is off.
+                        if (!running) item { HistoryNote() }
+                        items(lookups, key = { "${it.uid}:${it.host}" }) {
+                            LookupRow(it, isTracker = trackers.isTracker(it.host))
+                        }
+                    }
+                    running -> item { WaitingLine() }
                 }
             }
 
@@ -200,7 +213,7 @@ private fun RunningCard(onStop: () -> Unit, onClear: () -> Unit) {
 }
 
 @Composable
-private fun LookupRow(lookup: DnsLookup) {
+private fun LookupRow(lookup: DnsLookup, isTracker: Boolean) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
@@ -227,12 +240,34 @@ private fun LookupRow(lookup: DnsLookup) {
                 }
             }
             Spacer(Modifier.height(2.dp))
-            Text(
-                lookup.host,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.secondary,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    lookup.host,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (isTracker) {
+                    Spacer(Modifier.width(8.dp))
+                    TrackerTag()
+                }
+            }
         }
+    }
+}
+
+@Composable
+private fun TrackerTag() {
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+    ) {
+        Text(
+            "tracker",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onTertiaryContainer,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        )
     }
 }
 
@@ -290,6 +325,16 @@ private fun privateDnsActive(context: Context): Boolean {
 private fun WaitingLine() {
     Text(
         "Listening... open an app and its lookups will appear here.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+        modifier = Modifier.padding(vertical = 4.dp),
+    )
+}
+
+@Composable
+private fun HistoryNote() {
+    Text(
+        "From your recent activity. Turn on to keep watching.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
         modifier = Modifier.padding(vertical = 4.dp),

@@ -64,6 +64,14 @@ class AlertPolicyTest {
     }
 
     @Test
+    fun dnsFlowCategoryMapsToDnsFlow() {
+        assertEquals(
+            AlertSource.DNS_FLOW,
+            alertSource(alert(categoryId = DNS_FLOW_CATEGORY)),
+        )
+    }
+
+    @Test
     fun signalCategoryIdMapsToSignalChanges() {
         assertEquals(AlertSource.SIGNAL_CHANGES, alertSource(alert(categoryId = "location")))
     }

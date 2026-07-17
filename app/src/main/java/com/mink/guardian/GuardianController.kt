@@ -17,10 +17,12 @@ import com.mink.guardian.llm.LlmEngine
 import com.mink.guardian.llm.MiniCpmChatFormat
 import com.mink.monitor.AppAccessScanner
 import com.mink.monitor.DataUseDecision
+import com.mink.monitor.DnsFlowHub
 import com.mink.monitor.HighRiskScanner
 import com.mink.monitor.NetworkUsageScanner
 import com.mink.monitor.SensorInUseMonitor
 import com.mink.monitor.TrackedSession
+import com.mink.monitor.TrackerList
 import com.mink.monitor.analyzeDataUsage
 import com.mink.monitor.dataUseWindow
 import com.mink.monitor.diffAppAccess
@@ -91,6 +93,16 @@ class GuardianController(
      * graph and must stay self-contained.
      */
     private val networkScanner = NetworkUsageScanner(appContext)
+
+    /** Bundled known-tracker list, for classifying observed DNS lookups. Loaded once. */
+    private val trackerList by lazy { TrackerList.load(appContext) }
+
+    /**
+     * User-app uids already surfaced as tracker-contacting this process. Kept in
+     * memory (guarded by [sweepMutex]) so the quiet insight fires at most once per
+     * app per run rather than every sweep; a restart may re-note it once.
+     */
+    private val reportedTrackerUids = mutableSetOf<Int>()
 
     /**
      * Near real-time camera/microphone use watch. Sessions arrive on the
@@ -382,13 +394,35 @@ class GuardianController(
                     }
                 }.getOrDefault(emptyList())
 
+                // DNS flow (opt-in): while the monitor runs, note a user app that
+                // contacted several known trackers. A quiet SUGGESTION, once per app
+                // per run (reportedTrackerUids), skipped entirely when the monitor is off.
+                val dnsFlowAlerts = runCatching {
+                    if (!DnsFlowHub.running.value) {
+                        emptyList()
+                    } else {
+                        val lookups = DnsFlowHub.report.value.lookups
+                        val findings = analyzeDnsFlows(lookups, trackerList::isTracker, reportedTrackerUids)
+                        if (findings.isNotEmpty()) {
+                            val mapped =
+                                dnsFlowFindingsToGuardian(findings, now) { UUID.randomUUID().toString() }
+                            reportedTrackerUids += mapped.reportedUids
+                            addObservations(mapped.observations)
+                            addAlerts(mapped.alerts)
+                            mapped.alerts
+                        } else {
+                            emptyList()
+                        }
+                    }
+                }.getOrDefault(emptyList())
+
                 _state.update { it.copy(lastSweepEpochMs = System.currentTimeMillis()) }
 
                 // Surface alerts through notifications as the gate decides. App-access,
-                // high-risk, and data-use alerts join the same merged pass so nothing is
-                // notified twice. The gate's cooldown runs on the monotonic clock, so
-                // wall-clock jumps cannot stretch or cancel the suppression window.
-                (newAlerts + appAccessAlerts + highRiskAlerts + dataUseAlerts)
+                // high-risk, data-use, and dns-flow alerts join the same merged pass so
+                // nothing is notified twice. The gate's cooldown runs on the monotonic
+                // clock, so wall-clock jumps cannot stretch or cancel the suppression window.
+                (newAlerts + appAccessAlerts + highRiskAlerts + dataUseAlerts + dnsFlowAlerts)
                     .filter { notificationGate.shouldNotify(it, settings, android.os.SystemClock.elapsedRealtime()) }
                     .forEach { GuardianService.postAlertNotification(appContext, it) }
             }

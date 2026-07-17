@@ -188,6 +188,13 @@ class DnsFlowTest {
     }
 
     @Test
+    fun rollupEntryRoundTrips() {
+        val lookup = DnsLookup(10201, "com.mink", "Mink", false, "example.com", 100L, 200L, 3)
+        val back = lookup.toEntry().toLookup()
+        assertEquals(lookup, back)
+    }
+
+    @Test
     fun hubEvictsOldestBeyondTheCap() {
         DnsFlowHub.clear()
         // Record more than the cap (500) distinct hosts with strictly increasing time.

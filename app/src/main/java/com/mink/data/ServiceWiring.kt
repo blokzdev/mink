@@ -43,7 +43,7 @@ object ServiceWiring {
         // App access, data use, and DNS flow are independent of guardian/companion and cannot fail to construct.
         val appAccess = AppAccessMonitor(appContext, appScope)
         val networkUsage = NetworkUsageMonitor(appContext, appScope)
-        val dnsFlow = DnsFlowMonitor(appContext)
+        val dnsFlow = DnsFlowMonitor(appContext, appScope)
 
         return MinkServices(
             store = store,
