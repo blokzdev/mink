@@ -3,6 +3,7 @@ package com.mink.data
 import com.mink.companion.Companion
 import com.mink.guardian.Guardian
 import com.mink.monitor.AppAccessMonitor
+import com.mink.monitor.DnsFlowMonitor
 import com.mink.monitor.NetworkUsageMonitor
 import kotlinx.coroutines.CoroutineScope
 
@@ -12,8 +13,8 @@ import kotlinx.coroutines.CoroutineScope
  * gracefully if those subsystems are unavailable (e.g. a device where the
  * native model bridge failed to load, or overlay support is missing).
  *
- * [appAccess] and [networkUsage] are non-null: they need no model and cannot
- * fail to construct.
+ * [appAccess], [networkUsage], and [dnsFlow] are non-null: they need no model
+ * and cannot fail to construct.
  */
 class MinkServices(
     val store: SignalStore,
@@ -23,4 +24,5 @@ class MinkServices(
     val companion: Companion?,
     val appAccess: AppAccessMonitor,
     val networkUsage: NetworkUsageMonitor,
+    val dnsFlow: DnsFlowMonitor,
 )

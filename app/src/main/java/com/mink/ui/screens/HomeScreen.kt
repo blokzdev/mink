@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.DataUsage
+import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material.icons.filled.Pets
@@ -126,6 +127,14 @@ fun HomeScreen(
                     title = "Data use",
                     subtitle = "See how much data each app uses, on cellular and in the background.",
                     onClick = { navController.navigate(MinkRoute.NETWORK_USAGE) },
+                )
+            }
+            item {
+                EntryBanner(
+                    icon = Icons.Filled.Dns,
+                    title = "Network activity",
+                    subtitle = "See which servers each app looks up. Opt-in, on-device, names only.",
+                    onClick = { navController.navigate(MinkRoute.DNS_FLOW) },
                 )
             }
 

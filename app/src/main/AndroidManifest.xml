@@ -103,6 +103,21 @@
                 android:value="on_device_privacy_analysis" />
         </service>
 
+        <!-- Opt-in DNS-flow monitor: a DNS-only local VPN that attributes lookups
+             to apps. Off by default; started only after explicit VPN consent. -->
+        <service
+            android:name=".monitor.FlowMonitorService"
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="opt_in_dns_activity_monitor" />
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+
         <!-- Shares exported fingerprint reports. -->
         <provider
             android:name="androidx.core.content.FileProvider"
