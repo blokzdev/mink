@@ -260,6 +260,7 @@ class GuardianStoreMigrationTest {
             globalSeeded = true,
             lastAlertnessName = Alertness.STANDARD.name,
             lastMutedSourceNames = setOf(AlertSource.DNS_FLOW.name),
+            lastRefinedSweepCount = 48,
         )
         store.saveRefinerState(refiner)
 

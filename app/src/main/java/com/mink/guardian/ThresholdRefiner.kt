@@ -108,6 +108,15 @@ data class RefinerState(
     val lastAlertnessName: String = "",
     /** The muted sources at the last tick, so a mute toggle can reset that source. */
     val lastMutedSourceNames: Set<String> = emptySet(),
+    /**
+     * The baseline sweep count at the last tick that actually ran. The slow loop
+     * fires on `sweepCount % period == 0`, but that count comes from the in-memory
+     * baseline, which is only made durable by a save that can fail; without this a
+     * failed baseline save would re-present the same count next sweep and re-fire
+     * the refiner, collapsing the gradual escalation. Defaults to -1 so the very
+     * first eligible tick still runs.
+     */
+    val lastRefinedSweepCount: Int = -1,
 ) {
     /**
      * The cooldown multiplier for [source]: `level + 1`, coerced into
@@ -146,6 +155,12 @@ data class RefinerContext(
  *
  * An alert counts toward its source only if it was a genuine notification
  * candidate whose acknowledgement (or lack of it) is a real signal:
+ *  - not from a [mutedSources] family (a muted alert is never delivered, so its
+ *    unacknowledged state is not rejection — the same reason immutable and
+ *    below-floor alerts are excluded; without this, a source the user muted would
+ *    be throttled on invisible non-acks and stay throttled just after they unmute
+ *    it. Currently-muted sources are also snapped down by the refiner's
+ *    evidence-gone rule, since they never appear in the sample);
  *  - not an immutable-rule alert (those always notify and can never be throttled);
  *  - not CRITICAL (CRITICAL is exempt from the cooldown, so it is never throttled);
  *  - at or above the [eligibleFloor] the given dial would notify (an alert below
@@ -157,6 +172,7 @@ data class RefinerContext(
 fun engagementSampleOf(
     alerts: List<GuardianAlert>,
     eligibleFloor: AlertLevel,
+    mutedSources: Set<AlertSource>,
     nowMs: Long,
     config: RefinerConfig = RefinerConfig.DEFAULT,
 ): EngagementSample {
@@ -170,6 +186,7 @@ fun engagementSampleOf(
         val age = nowMs - alert.createdAtEpochMs
         if (age < config.maturityMs || age > config.windowMs) continue
         val source = alertSource(alert)
+        if (source in mutedSources) continue
         val bucket = perSource.getOrPut(source) { IntArray(2) }
         bucket[0]++
         globalTotal++
@@ -184,6 +201,16 @@ fun engagementSampleOf(
         globalAcked = globalAcked,
     )
 }
+
+/**
+ * Whether the slow loop should run this sweep: it is a period boundary AND it has
+ * not already run at this [sweepCount]. The second clause matters because the
+ * caller derives [sweepCount] from the in-memory baseline, whose durable save can
+ * fail and re-present the same count on the next sweep; without the guard the
+ * refiner would re-fire and collapse the multi-tick escalation ramp.
+ */
+fun shouldRefine(sweepCount: Int, lastRefinedSweepCount: Int, config: RefinerConfig = RefinerConfig.DEFAULT): Boolean =
+    sweepCount % config.periodSweeps == 0 && sweepCount != lastRefinedSweepCount
 
 /**
  * The Wilson score interval's upper bound for [successes] out of [n] at
@@ -244,15 +271,19 @@ fun refineThresholds(
     val nowAlertness = context.alertness.name
     val nowMuted = context.mutedSources.map { it.name }.toSet()
 
-    // Step 0: override reset.
+    // Step 0: override reset. The user's explicit act supersedes learned state, so
+    // affected sources are wiped to a fully fresh SourceRefine — not just level 0
+    // but also the smoothed rate and its seeded flag — so nothing learned under the
+    // old regime (or while a source was muted and invisible) biases the next
+    // judgement; they relearn from scratch on the sources' now-visible alerts.
     var working: Map<String, SourceRefine> = prior.perSource
     if (prior.lastAlertnessName.isNotEmpty() && nowAlertness != prior.lastAlertnessName) {
-        working = working.mapValues { it.value.copy(level = 0) }
+        working = working.mapValues { SourceRefine() }
     } else {
         // Symmetric difference: sources whose mute membership toggled either way.
         val toggled = (prior.lastMutedSourceNames - nowMuted) + (nowMuted - prior.lastMutedSourceNames)
         if (toggled.isNotEmpty()) {
-            working = working.mapValues { (k, v) -> if (k in toggled) v.copy(level = 0) else v }
+            working = working.mapValues { (k, v) -> if (k in toggled) SourceRefine() else v }
         }
     }
 

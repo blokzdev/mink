@@ -318,18 +318,25 @@ class GuardianController(
                 // Slow loop: once every RefinerConfig.periodSweeps sweeps, fold the
                 // user's engagement (acknowledged alerts) into per-source cooldown
                 // adjustments. Reuses the baseline's own sweep counter so there is no
-                // second clock to drift. Reads the live alert list — this sweep's fresh
-                // alerts are excluded by the refiner's maturity gate, so no contamination.
-                if (updatedBaseline.sweepCount % refinerConfig.periodSweeps == 0) {
+                // second clock to drift; the shouldRefine guard keeps a failed baseline
+                // save from re-firing the tick at the same count. Reads the live alert
+                // list — this sweep's fresh alerts are excluded by the refiner's
+                // maturity gate, and muted sources are excluded from the sample, so no
+                // contamination.
+                if (shouldRefine(updatedBaseline.sweepCount, refinerState.lastRefinedSweepCount, refinerConfig)) {
                     val sample = engagementSampleOf(
-                        _alerts.value, notifyFloor(settings.alertness), now, refinerConfig,
+                        _alerts.value,
+                        notifyFloor(settings.alertness),
+                        settings.mutedSources,
+                        now,
+                        refinerConfig,
                     )
                     refinerState = refineThresholds(
                         refinerState,
                         sample,
                         RefinerContext(settings.alertness, settings.mutedSources),
                         refinerConfig,
-                    )
+                    ).copy(lastRefinedSweepCount = updatedBaseline.sweepCount)
                     runCatching { persistence.saveRefinerState(refinerState) }
                 }
 

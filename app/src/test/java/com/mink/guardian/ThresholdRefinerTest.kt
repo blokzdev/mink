@@ -1,6 +1,7 @@
 package com.mink.guardian
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -96,7 +97,7 @@ class ThresholdRefinerTest {
             alert(level = AlertLevel.WARNING, createdAtEpochMs = fresh, id = "fresh"),
             alert(level = AlertLevel.WARNING, createdAtEpochMs = stale, id = "stale"),
         )
-        val s = engagementSampleOf(alerts, notifyFloor(Alertness.STANDARD), now, cfg)
+        val s = engagementSampleOf(alerts, notifyFloor(Alertness.STANDARD), emptySet(), now, cfg)
         // Only the single matured, acknowledged WARNING survives.
         assertEquals(1, s.globalTotal)
         assertEquals(1, s.globalAcked)
@@ -109,8 +110,36 @@ class ThresholdRefinerTest {
         val matured = now - 3L * 24 * 60 * 60 * 1000
         val suggestion = listOf(alert(level = AlertLevel.SUGGESTION, createdAtEpochMs = matured))
         // PARANOID notifies SUGGESTION and up -> counted; STANDARD does not.
-        assertEquals(1, engagementSampleOf(suggestion, notifyFloor(Alertness.PARANOID), now, cfg).globalTotal)
-        assertEquals(0, engagementSampleOf(suggestion, notifyFloor(Alertness.STANDARD), now, cfg).globalTotal)
+        assertEquals(1, engagementSampleOf(suggestion, notifyFloor(Alertness.PARANOID), emptySet(), now, cfg).globalTotal)
+        assertEquals(0, engagementSampleOf(suggestion, notifyFloor(Alertness.STANDARD), emptySet(), now, cfg).globalTotal)
+    }
+
+    @Test
+    fun sampleExcludesMutedSources() {
+        // A muted source's alerts are never delivered, so their unacknowledged
+        // state is not a rejection signal and must not count toward a raise.
+        val now = 100L * 24 * 60 * 60 * 1000
+        val matured = now - 3L * 24 * 60 * 60 * 1000
+        val alerts = listOf(
+            alert(categoryId = SENSOR_USE_CATEGORY, createdAtEpochMs = matured, id = "muted"),
+            alert(categoryId = APP_ACCESS_CATEGORY, createdAtEpochMs = matured, id = "visible", acknowledged = true),
+        )
+        val s = engagementSampleOf(
+            alerts, notifyFloor(Alertness.STANDARD), setOf(AlertSource.SENSOR_USE), now, cfg,
+        )
+        assertEquals(null, s.perSource[AlertSource.SENSOR_USE])          // muted -> excluded
+        assertEquals(SourceSample(1, 1), s.perSource[AlertSource.ACCESS_CHANGES])
+        assertEquals(1, s.globalTotal)                                   // only the visible one
+    }
+
+    // ---- shouldRefine guard ----
+
+    @Test
+    fun shouldRefineOnlyAtPeriodBoundaryAndNotTwiceAtTheSameCount() {
+        assertTrue(shouldRefine(sweepCount = 24, lastRefinedSweepCount = -1, cfg))   // first boundary
+        assertFalse(shouldRefine(sweepCount = 23, lastRefinedSweepCount = -1, cfg))  // off boundary
+        assertFalse(shouldRefine(sweepCount = 24, lastRefinedSweepCount = 24, cfg))  // already ran here
+        assertTrue(shouldRefine(sweepCount = 48, lastRefinedSweepCount = 24, cfg))   // next boundary
     }
 
     // ---- disengagement guard ----
