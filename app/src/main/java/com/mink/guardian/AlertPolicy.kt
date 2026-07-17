@@ -30,6 +30,19 @@ fun alertSource(alert: GuardianAlert): AlertSource = when {
 const val NOTIFICATION_COOLDOWN_MS = 30L * 60L * 1000L
 
 /**
+ * The severity floor the [Alertness] dial imposes: QUIET notifies CRITICAL
+ * only, STANDARD WARNING and up, PARANOID SUGGESTION and up. Extracted so the
+ * gate and the threshold refiner ([engagementSampleOf]) agree on exactly which
+ * alerts a given dial would have notified. INFO is below every floor and never
+ * notifies — it is timeline material on every setting.
+ */
+fun notifyFloor(alertness: Alertness): AlertLevel = when (alertness) {
+    Alertness.QUIET -> AlertLevel.CRITICAL
+    Alertness.STANDARD -> AlertLevel.WARNING
+    Alertness.PARANOID -> AlertLevel.SUGGESTION
+}
+
+/**
  * Decides which alerts become notifications. Pure decision logic with one piece
  * of state: the last time each (categoryId, title) pair was allowed through,
  * for the cooldown. Single-threaded by contract (the controller calls it under
@@ -43,9 +56,13 @@ const val NOTIFICATION_COOLDOWN_MS = 30L * 60L * 1000L
  *    notifies WARNING and up; [Alertness.PARANOID] notifies SUGGESTION and up.
  *    (INFO never notifies: it is timeline material on every setting.)
  * 4. cooldown: a non-CRITICAL alert with the same (categoryId, title) allowed
- *    through less than [NOTIFICATION_COOLDOWN_MS] ago is suppressed — this is
- *    the notification frequency policy deferred from the sensor-monitor review.
- *    CRITICAL is exempt.
+ *    through less than [NOTIFICATION_COOLDOWN_MS] × [cooldownMultiplier] ago is
+ *    suppressed — this is the notification frequency policy deferred from the
+ *    sensor-monitor review. CRITICAL is exempt. The multiplier (default 1) is
+ *    the ONLY place the two-loop threshold refiner touches the gate: it can
+ *    lengthen the window for a source the user demonstrably ignores, but being
+ *    ≥ 1 it can only make the gate quieter, and living in step 4 it can never
+ *    reach an immutable, muted, CRITICAL, or first-occurrence alert.
  *
  * A `true` return records elapsedMs for the cooldown key. elapsedMs is a
  * monotonic reading (SystemClock.elapsedRealtime in production), not the wall
@@ -57,8 +74,19 @@ class NotificationGate {
     /** Last monotonic time each (categoryId, title) pair was allowed through. */
     private val lastAllowedMs = mutableMapOf<String, Long>()
 
-    fun shouldNotify(alert: GuardianAlert, settings: GuardianSettings, elapsedMs: Long): Boolean {
-        val allowed = passesPolicy(alert, settings, elapsedMs)
+    /**
+     * @param cooldownMultiplier a per-source multiplier (≥ 1) on the repeat
+     *   cooldown, supplied by the refiner. 1 reproduces the flat 30-minute
+     *   window exactly; higher values only lengthen it. Defaulted so every
+     *   existing caller and test keeps its current behaviour.
+     */
+    fun shouldNotify(
+        alert: GuardianAlert,
+        settings: GuardianSettings,
+        elapsedMs: Long,
+        cooldownMultiplier: Int = 1,
+    ): Boolean {
+        val allowed = passesPolicy(alert, settings, elapsedMs, cooldownMultiplier)
         if (allowed) {
             // Cheap leak guard: the map is bounded by distinct titles in
             // practice, but if it ever grows past this, clearing costs at
@@ -69,18 +97,21 @@ class NotificationGate {
         return allowed
     }
 
-    private fun passesPolicy(alert: GuardianAlert, settings: GuardianSettings, elapsedMs: Long): Boolean {
+    private fun passesPolicy(
+        alert: GuardianAlert,
+        settings: GuardianSettings,
+        elapsedMs: Long,
+        cooldownMultiplier: Int,
+    ): Boolean {
         if (alert.fromImmutableRule) return true
         if (alertSource(alert) in settings.mutedSources) return false
-        val floor = when (settings.alertness) {
-            Alertness.QUIET -> AlertLevel.CRITICAL
-            Alertness.STANDARD -> AlertLevel.WARNING
-            Alertness.PARANOID -> AlertLevel.SUGGESTION
-        }
-        if (alert.level < floor) return false
+        if (alert.level < notifyFloor(settings.alertness)) return false
         if (alert.level != AlertLevel.CRITICAL) {
             val last = lastAllowedMs[cooldownKey(alert)]
-            if (last != null && elapsedMs - last < NOTIFICATION_COOLDOWN_MS) return false
+            // Multiplier clamped to ≥ 1 defensively: the refiner is quieter-only,
+            // so a stray value below 1 must never shorten the window below default.
+            val window = NOTIFICATION_COOLDOWN_MS * cooldownMultiplier.coerceAtLeast(1)
+            if (last != null && elapsedMs - last < window) return false
         }
         return true
     }

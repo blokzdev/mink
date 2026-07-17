@@ -254,4 +254,55 @@ class AlertPolicyTest {
         assertEquals(Alertness.STANDARD, settings.alertness)
         assertTrue(settings.mutedSources.isEmpty())
     }
+
+    // ---- refiner cooldown multiplier (quieter-only) ----
+
+    @Test
+    fun defaultMultiplierReproducesTheFlatCooldown() {
+        // The refiner's default (1) must behave identically to the pre-refiner gate.
+        val gate = NotificationGate()
+        val settings = GuardianSettings()
+        val warning = alert(level = AlertLevel.WARNING, title = "Repeat")
+        assertTrue(gate.shouldNotify(warning, settings, elapsedMs = 0L, cooldownMultiplier = 1))
+        assertFalse(gate.shouldNotify(warning, settings, elapsedMs = NOTIFICATION_COOLDOWN_MS - 1, cooldownMultiplier = 1))
+        assertTrue(gate.shouldNotify(warning, settings, elapsedMs = NOTIFICATION_COOLDOWN_MS, cooldownMultiplier = 1))
+    }
+
+    @Test
+    fun multiplierThreeLengthensTheRepeatWindow() {
+        // At multiplier 3 the window is 90 min: a repeat at 60 min is suppressed,
+        // the same repeat at 90 min notifies.
+        val gate = NotificationGate()
+        val settings = GuardianSettings()
+        val warning = alert(level = AlertLevel.WARNING, title = "Noisy repeat")
+        assertTrue(gate.shouldNotify(warning, settings, elapsedMs = 0L, cooldownMultiplier = 3))
+        assertFalse(gate.shouldNotify(warning, settings, elapsedMs = 2 * NOTIFICATION_COOLDOWN_MS, cooldownMultiplier = 3))
+        assertTrue(gate.shouldNotify(warning, settings, elapsedMs = 3 * NOTIFICATION_COOLDOWN_MS, cooldownMultiplier = 3))
+    }
+
+    @Test
+    fun multiplierNeverAffectsCriticalOrImmutable() {
+        // Quieter-only lives in the cooldown step, which CRITICAL and immutable
+        // alerts bypass entirely: even multiplier 3 leaves them notifying on repeat.
+        val gate = NotificationGate()
+        val settings = GuardianSettings()
+        val critical = alert(level = AlertLevel.CRITICAL, title = "Critical repeat")
+        assertTrue(gate.shouldNotify(critical, settings, elapsedMs = 0L, cooldownMultiplier = 3))
+        assertTrue(gate.shouldNotify(critical, settings, elapsedMs = 60_000L, cooldownMultiplier = 3))
+
+        val immutable = alert(level = AlertLevel.WARNING, title = "Immutable repeat", fromImmutableRule = true)
+        assertTrue(gate.shouldNotify(immutable, settings, elapsedMs = 0L, cooldownMultiplier = 3))
+        assertTrue(gate.shouldNotify(immutable, settings, elapsedMs = 60_000L, cooldownMultiplier = 3))
+    }
+
+    @Test
+    fun multiplierBelowOneCannotShortenBelowDefault() {
+        // Defensive clamp: a stray multiplier under 1 must never make the gate
+        // louder than the flat default — the refiner is strictly quieter-only.
+        val gate = NotificationGate()
+        val settings = GuardianSettings()
+        val warning = alert(level = AlertLevel.WARNING, title = "Clamp")
+        assertTrue(gate.shouldNotify(warning, settings, elapsedMs = 0L, cooldownMultiplier = 0))
+        assertFalse(gate.shouldNotify(warning, settings, elapsedMs = NOTIFICATION_COOLDOWN_MS - 1, cooldownMultiplier = 0))
+    }
 }

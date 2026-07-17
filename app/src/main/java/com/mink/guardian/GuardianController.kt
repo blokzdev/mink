@@ -136,6 +136,19 @@ class GuardianController(
     @Volatile
     private var settings = GuardianSettings()
 
+    /** Tunables for the slow-loop threshold refiner. */
+    private val refinerConfig = RefinerConfig.DEFAULT
+
+    /**
+     * The learned per-source cooldown adjustment. Read on every notify decision,
+     * rewritten once every [RefinerConfig.periodSweeps] sweeps — both only ever
+     * under [sweepMutex], so the refiner never races. An empty default means
+     * every multiplier is 1, i.e. exactly the pre-refiner behaviour, until the
+     * first tick learns otherwise.
+     */
+    @Volatile
+    private var refinerState = RefinerState()
+
     /**
      * Completed once the init restore has finished loading persisted settings,
      * successfully or not. Sweeps wait on it (bounded) so a WorkManager-spawned
@@ -178,6 +191,7 @@ class GuardianController(
                 val chat = runCatching { persistence.loadChatLog() }.getOrDefault(emptyList())
                 val storedBaseline = runCatching { persistence.loadBaseline() }.getOrNull()
                 settings = runCatching { persistence.loadSettings() }.getOrDefault(GuardianSettings())
+                refinerState = runCatching { persistence.loadRefinerState() }.getOrNull() ?: RefinerState()
 
                 _observations.value = obs
                 _alerts.value = alertList
@@ -301,6 +315,24 @@ class GuardianController(
                 runCatching { persistence.saveBaseline(updatedBaseline) }
                 _baseline.value = updatedBaseline.summary(now)
 
+                // Slow loop: once every RefinerConfig.periodSweeps sweeps, fold the
+                // user's engagement (acknowledged alerts) into per-source cooldown
+                // adjustments. Reuses the baseline's own sweep counter so there is no
+                // second clock to drift. Reads the live alert list — this sweep's fresh
+                // alerts are excluded by the refiner's maturity gate, so no contamination.
+                if (updatedBaseline.sweepCount % refinerConfig.periodSweeps == 0) {
+                    val sample = engagementSampleOf(
+                        _alerts.value, notifyFloor(settings.alertness), now, refinerConfig,
+                    )
+                    refinerState = refineThresholds(
+                        refinerState,
+                        sample,
+                        RefinerContext(settings.alertness, settings.mutedSources),
+                        refinerConfig,
+                    )
+                    runCatching { persistence.saveRefinerState(refinerState) }
+                }
+
                 // Watch who can reach what: diff granted capabilities across sweeps.
                 // An empty scan is a failed scan, so it neither diffs nor saves —
                 // it must not wipe the previous state or read as mass uninstall.
@@ -423,7 +455,14 @@ class GuardianController(
                 // nothing is notified twice. The gate's cooldown runs on the monotonic
                 // clock, so wall-clock jumps cannot stretch or cancel the suppression window.
                 (newAlerts + appAccessAlerts + highRiskAlerts + dataUseAlerts + dnsFlowAlerts)
-                    .filter { notificationGate.shouldNotify(it, settings, android.os.SystemClock.elapsedRealtime()) }
+                    .filter {
+                        notificationGate.shouldNotify(
+                            it,
+                            settings,
+                            android.os.SystemClock.elapsedRealtime(),
+                            refinerState.cooldownMultiplier(alertSource(it)),
+                        )
+                    }
                     .forEach { GuardianService.postAlertNotification(appContext, it) }
             }
         }
@@ -604,7 +643,13 @@ class GuardianController(
                         addAlerts(listOf(alert))
                         // The gate's cooldown is the frequency policy once deferred from
                         // here; it runs on the monotonic clock, not the wall clock.
-                        if (notificationGate.shouldNotify(alert, settings, android.os.SystemClock.elapsedRealtime())) {
+                        val allowed = notificationGate.shouldNotify(
+                            alert,
+                            settings,
+                            android.os.SystemClock.elapsedRealtime(),
+                            refinerState.cooldownMultiplier(alertSource(alert)),
+                        )
+                        if (allowed) {
                             GuardianService.postAlertNotification(appContext, alert)
                         }
                     }

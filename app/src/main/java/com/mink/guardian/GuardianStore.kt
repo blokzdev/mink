@@ -146,6 +146,35 @@ class GuardianStore(
         writeRaw(KEY_BASELINE, raw)
     }
 
+    // ---- Threshold refiner state ----
+
+    /**
+     * The learned notification-threshold refiner state, or null if none is stored
+     * yet, it fails to parse, or its [RefinerState.schemaVersion] does not match
+     * [REFINER_SCHEMA_VERSION]. Discard-on-mismatch mirrors [loadBaseline]: a
+     * legacy (unversioned, decodes to 0) or future/downgrade blob may be shaped
+     * differently, and a discarded refiner state simply means every cooldown
+     * multiplier is 1 — today's behaviour — until the refiner relearns.
+     *
+     * [RefinerState] is `@Serializable` directly (data-layer machinery — derived
+     * rates and levels, never raw alert history — not a public contract type), so
+     * no DTO mirror.
+     */
+    suspend fun loadRefinerState(): RefinerState? {
+        val raw = readRaw(KEY_REFINER) ?: return null
+        val state = runCatching {
+            json.decodeFromString(RefinerState.serializer(), raw)
+        }.getOrNull() ?: return null
+        return if (state.schemaVersion == REFINER_SCHEMA_VERSION) state else null
+    }
+
+    suspend fun saveRefinerState(state: RefinerState) {
+        val raw = runCatching {
+            json.encodeToString(RefinerState.serializer(), state)
+        }.getOrNull() ?: return
+        writeRaw(KEY_REFINER, raw)
+    }
+
     // ---- App access snapshot ----
 
     /**
@@ -294,6 +323,7 @@ class GuardianStore(
             get() = listOf(
                 KEY_OBSERVATIONS, KEY_ALERTS, KEY_CHAT, KEY_SETTINGS, KEY_SNAPSHOT,
                 KEY_BASELINE, KEY_APP_ACCESS, KEY_HIGH_RISK, KEY_LAST_NETWORK_CHECK,
+                KEY_REFINER,
             )
 
         val KEY_OBSERVATIONS = stringPreferencesKey("observations")
@@ -305,6 +335,7 @@ class GuardianStore(
         val KEY_APP_ACCESS = stringPreferencesKey("app_access")
         val KEY_HIGH_RISK = stringPreferencesKey("high_risk")
         val KEY_LAST_NETWORK_CHECK = stringPreferencesKey("last_network_check")
+        val KEY_REFINER = stringPreferencesKey("threshold_refiner")
     }
 }
 

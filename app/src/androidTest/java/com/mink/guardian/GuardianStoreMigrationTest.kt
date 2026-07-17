@@ -244,4 +244,52 @@ class GuardianStoreMigrationTest {
         // Re-encrypted by migration, but discarded by the schema-version guard.
         assertNull("schemaVersion 0 must be discarded on load", store.loadHighRiskSnapshot())
     }
+
+    @Test
+    fun refinerStateRoundTripsThroughEncryptionAndIsNotPlaintext() = runBlocking {
+        val cipher = KeystorePayloadCipher(alias = "mink.guardian.test." + System.nanoTime())
+        val store = encryptingStore(cipher)
+
+        val refiner = RefinerState(
+            schemaVersion = REFINER_SCHEMA_VERSION,
+            perSource = mapOf(
+                AlertSource.SENSOR_USE.name to SourceRefine(level = 2, smoothedAckRate = 0.05, seeded = true),
+                AlertSource.DATA_USE.name to SourceRefine(level = 1, smoothedAckRate = 0.3, seeded = true),
+            ),
+            smoothedGlobalAckRate = 0.5,
+            globalSeeded = true,
+            lastAlertnessName = Alertness.STANDARD.name,
+            lastMutedSourceNames = setOf(AlertSource.DNS_FLOW.name),
+        )
+        store.saveRefinerState(refiner)
+
+        // Readable through the encrypting store...
+        assertEquals(refiner, store.loadRefinerState())
+
+        // ...and actually encrypted: a store with no cipher sees ciphertext it
+        // cannot parse back into refiner state.
+        assertNull(
+            "legacy read of encrypted refiner state should yield nothing",
+            legacyStore().loadRefinerState(),
+        )
+    }
+
+    @Test
+    fun legacyVersionZeroRefinerStateIsDiscardedOnLoad() = runBlocking {
+        val cipher = KeystorePayloadCipher(alias = "mink.guardian.test." + System.nanoTime())
+
+        // A pre-versioning blob decodes to schemaVersion 0; discarding it means
+        // every cooldown multiplier is 1 — today's behaviour — until it relearns.
+        val legacy = RefinerState(
+            schemaVersion = 0,
+            perSource = mapOf(AlertSource.SENSOR_USE.name to SourceRefine(level = 2, seeded = true)),
+        )
+        legacyStore().saveRefinerState(legacy)
+
+        val store = encryptingStore(cipher)
+        store.migrateLegacyPayloads()
+
+        // Re-encrypted by migration, but discarded by the schema-version guard.
+        assertNull("schemaVersion 0 must be discarded on load", store.loadRefinerState())
+    }
 }
