@@ -46,6 +46,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Resume the opt-in DNS-flow monitor after a reboot if the user left it on. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- The permissions above imply hardware, but Mink runs fine without any of
          it (it just shows fewer signals), so nothing is required. This keeps the
@@ -117,6 +119,17 @@
                 <action android:name="android.net.VpnService" />
             </intent-filter>
         </service>
+
+        <!-- Resumes the DNS-flow monitor on boot / after an update, if it was on. -->
+        <receiver
+            android:name=".monitor.BootReceiver"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- Shares exported fingerprint reports. -->
         <provider
