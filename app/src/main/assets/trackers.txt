@@ -122,3 +122,65 @@ ads.tiktok.com
 # --- Yandex ---
 appmetrica.yandex.net
 mc.yandex.ru
+
+# --- More ad networks / exchanges (well-known, registrable-domain safe) ---
+adnxs.com
+amazon-adsystem.com
+2mdn.net
+adservice.google.com
+media.net
+3lift.com
+gumgum.com
+sharethrough.com
+indexww.com
+adform.net
+spotxchange.com
+sonobi.com
+districtm.io
+yieldlab.net
+adikteev.com
+remerge.io
+liftoff.io
+pangle.io
+tanx.com
+
+# --- Data-management platforms / identity graphs ---
+demdex.net
+omtrdc.net
+2o7.net
+everesttech.net
+adobedtm.com
+krxd.net
+bluekai.com
+rlcdn.com
+crwdcntrl.net
+agkn.com
+tapad.com
+eyeota.net
+
+# --- Social pixels (narrow endpoints, not the core apps) ---
+ads-twitter.com
+analytics.twitter.com
+tr.snapchat.com
+ct.pinterest.com
+px.ads.linkedin.com
+pixel.reddit.com
+bat.bing.com
+
+# --- Session replay / product analytics ---
+clarity.ms
+mouseflow.com
+inspectlet.com
+logrocket.com
+smartlook.com
+contentsquare.net
+api2.amplitude.com
+cdn.segment.com
+
+# --- Push / engagement SDKs (China + global) ---
+getui.com
+jpush.cn
+igexin.com
+pushwoosh.com
+moengage.com
+webengage.com

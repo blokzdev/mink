@@ -3,6 +3,7 @@ package com.mink.monitor
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -68,8 +69,23 @@ class DnsFlowStore(
         context.dnsFlowDataStore.edit { it[KEY] = stored }
     }
 
+    /**
+     * Whether the user last left the monitor on — read at boot to decide whether
+     * to resume it. A plain boolean (not sensitive; the sensitive rollup stays
+     * encrypted under [KEY]). Defaults to false and never throws.
+     */
+    suspend fun loadEnabled(): Boolean = runCatching {
+        context.dnsFlowDataStore.data.first()[KEY_ENABLED] ?: false
+    }.getOrDefault(false)
+
+    /** Record whether the monitor is on, so a reboot can restore the choice. */
+    suspend fun saveEnabled(enabled: Boolean) {
+        runCatching { context.dnsFlowDataStore.edit { it[KEY_ENABLED] = enabled } }
+    }
+
     private companion object {
         val KEY: Preferences.Key<String> = stringPreferencesKey("dns_rollup")
+        val KEY_ENABLED: Preferences.Key<Boolean> = booleanPreferencesKey("dns_enabled")
     }
 }
 

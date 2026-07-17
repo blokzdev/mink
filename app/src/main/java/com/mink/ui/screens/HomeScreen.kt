@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.DataUsage
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.IosShare
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Pets
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -74,6 +75,9 @@ fun HomeScreen(
             TopAppBar(
                 title = { Text("Mink") },
                 actions = {
+                    IconButton(onClick = { navController.navigate(MinkRoute.SETTINGS) }) {
+                        Icon(Icons.Filled.Settings, contentDescription = "Settings")
+                    }
                     IconButton(onClick = { navController.navigate(MinkRoute.EXPORT) }) {
                         Icon(Icons.Filled.IosShare, contentDescription = "Export")
                     }

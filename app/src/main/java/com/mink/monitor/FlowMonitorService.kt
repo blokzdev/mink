@@ -15,6 +15,7 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.system.OsConstants
 import android.util.Log
+import androidx.core.content.ContextCompat
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.DatagramPacket
@@ -52,6 +53,7 @@ class FlowMonitorService : VpnService() {
     @Volatile private var forwarders: ExecutorService? = null
     private val writeLock = Any()
     private var out: FileOutputStream? = null
+    @Volatile private var foreground = false
     private lateinit var upstream: InetAddress
     private lateinit var pm: PackageManager
 
@@ -64,8 +66,12 @@ class FlowMonitorService : VpnService() {
         pm = packageManager
         upstream = discoverUpstreamResolver()
 
-        // Establish the tunnel first: being the active VPN is what qualifies this
-        // service for the systemExempted foreground type, so promote only after.
+        // Promote to foreground BEFORE establishing. The specialUse FGS type does
+        // not require being the active VPN, and going foreground first satisfies
+        // startForegroundService's start-within-timeout contract even when this was
+        // launched from the boot receiver (a background start).
+        startAsForeground()
+
         val pfd = runCatching {
             Builder()
                 .setSession("Mink DNS monitor")
@@ -78,7 +84,7 @@ class FlowMonitorService : VpnService() {
         }.getOrNull()
         if (pfd == null) {
             Log.w(TAG, "establish() failed or was denied; stopping")
-            stopSelf()
+            stopEverything()
             return START_NOT_STICKY
         }
 
@@ -93,7 +99,6 @@ class FlowMonitorService : VpnService() {
             LinkedBlockingQueue(MAX_QUEUED_QUERIES),
             ThreadPoolExecutor.DiscardPolicy(),
         )
-        startAsForeground()
         DnsFlowHub.setRunning(true)
         thread(name = "dns-flow-reader") { readLoop(pfd) }
         return START_STICKY
@@ -225,7 +230,7 @@ class FlowMonitorService : VpnService() {
     }
 
     private fun stopEverything() {
-        if (!running && tunnel == null) return
+        if (!running && tunnel == null && !foreground) return
         running = false
         DnsFlowHub.setRunning(false)
         runCatching { forwarders?.shutdownNow() }
@@ -233,7 +238,10 @@ class FlowMonitorService : VpnService() {
         synchronized(writeLock) { runCatching { out?.close() }; out = null }
         runCatching { tunnel?.close() }
         tunnel = null
-        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+        if (foreground) {
+            foreground = false
+            runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+        }
         stopSelf()
     }
 
@@ -261,6 +269,7 @@ class FlowMonitorService : VpnService() {
         } else {
             startForeground(NOTIF_ID, n)
         }
+        foreground = true
     }
 
     companion object {
@@ -278,9 +287,16 @@ class FlowMonitorService : VpnService() {
         private const val MAX_QUEUED_QUERIES = 256
         private const val UPSTREAM_TIMEOUT_MS = 3000
 
-        /** Start the monitor. VPN consent ([VpnService.prepare]) must already be granted. */
+        /**
+         * Start the monitor. VPN consent ([VpnService.prepare]) must already be
+         * granted. Uses `startForegroundService` so it also works from the boot
+         * receiver's background context (the service promotes itself immediately).
+         */
         fun start(context: Context) {
-            context.startService(Intent(context, FlowMonitorService::class.java))
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, FlowMonitorService::class.java),
+            )
         }
 
         /** Ask the running monitor to stop. */

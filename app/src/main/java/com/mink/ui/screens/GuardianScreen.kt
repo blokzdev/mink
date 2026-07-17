@@ -23,9 +23,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -314,79 +311,6 @@ private fun AlertCard(alert: GuardianAlert, onAcknowledge: () -> Unit, onAskMink
                 }
                 TextButton(onClick = onAskMink) { Text("Ask Mink about this") }
             }
-        }
-    }
-}
-
-@Composable
-private fun AlertnessCard(
-    alertness: Alertness,
-    mutedSources: Set<AlertSource>,
-    onAlertnessChange: (Alertness) -> Unit,
-    onSourceMutedChange: (AlertSource, Boolean) -> Unit,
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 2.dp,
-    ) {
-        Column(modifier = Modifier.padding(18.dp)) {
-            Text("Alertness", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(10.dp))
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                val options = Alertness.entries
-                options.forEachIndexed { index, option ->
-                    SegmentedButton(
-                        selected = alertness == option,
-                        onClick = { onAlertnessChange(option) },
-                        shape = SegmentedButtonDefaults.itemShape(index = index, count = options.size),
-                    ) {
-                        Text(
-                            when (option) {
-                                Alertness.QUIET -> "Quiet"
-                                Alertness.STANDARD -> "Standard"
-                                Alertness.PARANOID -> "Paranoid"
-                            },
-                        )
-                    }
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            Text(
-                when (alertness) {
-                    Alertness.QUIET -> "Only critical findings interrupt you."
-                    Alertness.STANDARD -> "Warnings and critical findings interrupt you."
-                    Alertness.PARANOID -> "Suggestions, warnings, and critical findings interrupt you."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-            )
-            Spacer(Modifier.height(14.dp))
-            Text("Notify me about", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            AlertSource.entries.forEach { source ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        source.label,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Switch(
-                        checked = source !in mutedSources,
-                        onCheckedChange = { checked -> onSourceMutedChange(source, !checked) },
-                    )
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Muting only silences notifications — everything still lands in the timeline. " +
-                    "Mink's deepest protections always notify, on every setting.",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-            )
         }
     }
 }

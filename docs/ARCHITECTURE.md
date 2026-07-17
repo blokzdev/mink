@@ -334,9 +334,23 @@ hit), and the screen tags those rows. On the guardian side, `DnsFlowGuard`
 a quiet `SUGGESTION` — an insight, never a `CRITICAL`, never an immutable rule,
 raised at most once per app per run. It fires only while the monitor is on and
 only during a sweep, folding into the same notification gate as every other
-finding, so the alertness dial and per-source mute (`AlertSource.DNS_FLOW`) apply.
-The capability floor holds throughout: the tracker list and thresholds are
-deterministic and tunable — rules decide, the model never authors the scaffolding.
+finding, so the alertness dial and per-source mute (`AlertSource.DNS_FLOW`, shown
+as "Network activity" in Settings) apply. The capability floor holds throughout:
+the tracker list and thresholds are deterministic and tunable — rules decide, the
+model never authors the scaffolding.
+
+The monitor remembers whether it was on (`DnsFlowStore` keeps a small `enabled`
+flag beside the rollup), and a `BootReceiver` resumes it after a reboot or an app
+update — best-effort, only when the VPN consent still stands and the flag is set.
+For a guaranteed resume across every boot, the Settings screen points the user at
+Android's own always-on VPN toggle. Because the monitor may be started from that
+background boot context, `FlowMonitorService.start` uses `startForegroundService`
+and the service promotes itself to the foreground before establishing the tunnel.
+
+A shared **Settings** screen (a gear on the home bar) gathers the alertness dial
+and per-source mutes — the same control as on the guardian dashboard, extracted
+into one composable so both stay in step — alongside the network-activity note
+and quick links to permissions, export, and about.
 
 ## The companion
 

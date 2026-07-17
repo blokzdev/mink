@@ -38,9 +38,14 @@ guide, not a contract — reorder freely.
     `AlertSource.DNS_FLOW` + a tunable, quiet `DnsFlowGuard` insight (a user app
     that looked up several known trackers → `SUGGESTION`, once per app per run,
     no lane-5 immutable).
-  - **PR-3 (open):** onboarding/settings polish, boot-restart, real-device
-    coverage measurement (how much DNS is plaintext under a normal user's
-    config), and a larger/updatable tracker list.
+  - **PR-3 (done):** boot-restart (a persisted `enabled` flag + `BootReceiver`
+    that resumes the monitor when consent still stands; the service start path is
+    now boot-safe), a shared **Settings** screen (gear on the home bar) gathering
+    the alertness dial + per-source mutes + an always-on-VPN note + quick links,
+    and a substantially expanded tracker list. Still open: **real-device DNS
+    coverage measurement** (needs physical hardware — how much DNS is plaintext
+    under a normal user's config; verdict gate 2) and an updatable/remote tracker
+    list.
   (`NetworkStatsManager` data-use, already shipped, is the always-on volumes-only
   view; this is the opt-in per-destination complement.)
 

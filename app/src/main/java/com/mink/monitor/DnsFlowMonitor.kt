@@ -54,10 +54,16 @@ class DnsFlowMonitor(
     val isSupported: Boolean get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
 
     /** Start capture. VPN consent must already be granted by the caller. */
-    fun start() = FlowMonitorService.start(appContext)
+    fun start() {
+        scope.launch { runCatching { store.saveEnabled(true) } }
+        FlowMonitorService.start(appContext)
+    }
 
     /** Stop capture and release the VPN slot. */
-    fun stop() = FlowMonitorService.stop(appContext)
+    fun stop() {
+        scope.launch { runCatching { store.saveEnabled(false) } }
+        FlowMonitorService.stop(appContext)
+    }
 
     /** Forget everything observed so far, on disk and in memory. */
     fun clear() {
