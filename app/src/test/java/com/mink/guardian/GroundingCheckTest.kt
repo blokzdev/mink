@@ -161,53 +161,68 @@ class GroundingCheckTest {
     // ---- sentence-opener regressions (must NOT be rejected) ----
 
     @Test
-    fun capitalisedSentenceOpenersAreNotRejectedOnTheReadSurface() {
-        // The multi-sentence read (skipSentenceInitial=true) opens sentences with
-        // ordinary words that are always capitalised there; none is a product name.
-        // Robust beyond the stoplist: "Around" is not stoplisted yet still passes.
+    fun capitalisedSentenceOpenersAreNotRejected() {
+        // A warm, factual read opens sentences with ordinary words that are always
+        // capitalised there; each is in the stoplist, so none flags — the check is
+        // strict on every token (no sentence-position exemption).
         val facts = GroundingCheck.factsOf(
             "Recognizability: 40 out of 100.",
             "Bluetooth: your paired devices reveal a name.",
         )
-        fun read(text: String) =
-            GroundingCheck.isGrounded(text, facts, checkEntities = true, skipSentenceInitial = true)
-        assertTrue(read("None of this leaves your phone."))
-        assertTrue(read("Overall, you're fairly recognizable."))
-        assertTrue(read("Together, these readings single you out."))
-        assertTrue(read("Around here, little has changed."))
-        assertTrue(read("Instead, your Bluetooth name does the work."))
+        assertTrue(GroundingCheck.isGrounded("None of this leaves your phone.", facts))
+        assertTrue(GroundingCheck.isGrounded("Overall, you're fairly recognizable.", facts))
+        assertTrue(GroundingCheck.isGrounded("Together, these readings single you out.", facts))
+        assertTrue(GroundingCheck.isGrounded("Around here, little has changed.", facts))
+        assertTrue(GroundingCheck.isGrounded("Instead, your Bluetooth name does the work.", facts))
     }
 
     @Test
-    fun aSentenceInitialFabricatedAppIsCaughtOnTheStrictRemarkSurface() {
-        // The terse remark (skipSentenceInitial=false) keeps checking its first word,
-        // where the app name lives; the read surface tolerates it (entities grounded
-        // elsewhere). "Spotify" is not stoplisted and not in facts.
+    fun aFabricatedAppNameIsCaughtEvenWhenItOpensASentence() {
+        // Regression guard: a plain-capitalised fabricated app name must be rejected
+        // wherever it appears, including the first word of a sentence (an earlier
+        // sentence-initial exemption let these leak on the read surface).
         val facts = GroundingCheck.factsOf(
             "Weather gained camera access",
             "The Weather app can now use the camera.",
         )
+        // Sentence-initial (subject) fabrication.
         assertFalse(GroundingCheck.isGrounded("Spotify can now use your microphone.", facts))
-        assertTrue(
-            GroundingCheck.isGrounded(
-                "Spotify can now use your microphone.", facts,
-                checkEntities = true, skipSentenceInitial = true,
-            ),
-        )
+        assertFalse(GroundingCheck.isGrounded("Facebook has been quiet this week. Overall, you're fine.", facts))
+        // Mid-sentence fabrication after a grounded opener.
+        assertFalse(GroundingCheck.isGrounded("Overall, Spotify is the loudest app.", facts))
+        // Sentence-initial internal-caps fabrication is still caught too.
+        assertFalse(GroundingCheck.isGrounded("iMessage led the pack. Nothing else came close.", facts))
     }
 
-    // ---- digits glued inside tokens / idioms (must NOT be rejected) ----
+    // ---- number extraction: idioms vs magnitudes ----
 
     @Test
-    fun digitsGluedIntoIdiomsAndTokensAreNotCheckedAsNumbers() {
+    fun ratioAndClockIdiomsAreNotCheckedAsNumbers() {
         val facts = GroundingCheck.factsOf("Recognizability: 40 out of 100.")
-        // 24/7 and 10:30 are not word-shaped, so they clear both surfaces.
+        // 24/7 (ratio) and 10:30 (clock) are glued by '/' or ':', not figures.
         assertTrue(GroundingCheck.isGrounded("Mink watches 24/7, all on your phone.", facts))
         assertTrue(GroundingCheck.isGrounded("It stayed quiet at 10:30 today.", facts))
-        // On chat (entities off) glued alphanumerics like IPv6 / 2FA leave no
-        // standalone number to reject.
-        assertTrue(GroundingCheck.isGrounded("It uses IPv6 and stays local.", facts, checkEntities = false))
-        assertTrue(GroundingCheck.isGrounded("Turn on 2FA for safety.", facts, checkEntities = false))
+    }
+
+    @Test
+    fun aMagnitudeGluedToAUnitIsStillCheckedAndGroundedVsFabricated() {
+        val facts = GroundingCheck.factsOf("Maps used 1.2 GB in the background.")
+        // The grounded size, whether spaced or glued, must pass — and must not be
+        // truncated to its integer part (an earlier regex read "1.2GB" as "1").
+        assertTrue(GroundingCheck.isGrounded("It used 1.2GB overnight.", facts, checkEntities = false))
+        assertTrue(GroundingCheck.isGrounded("It used 1.2 GB overnight.", facts, checkEntities = false))
+        // A fabricated magnitude glued to a unit is still caught.
+        assertFalse(GroundingCheck.isGrounded("It used 10GB overnight.", facts, checkEntities = false))
+        assertFalse(GroundingCheck.isGrounded("It used 3.6GB overnight.", facts, checkEntities = false))
+    }
+
+    @Test
+    fun bothEndpointsOfAFabricatedHyphenRangeAreChecked() {
+        val facts = GroundingCheck.factsOf("You have 12 apps.")
+        assertFalse(GroundingCheck.isGrounded("You have 50-100 apps.", facts, checkEntities = false))
+        val claims = GroundingCheck.ungroundedClaims("You have 50-100 apps.", facts, checkEntities = false)
+        assertTrue(claims.contains("50"))
+        assertTrue(claims.contains("100"))
     }
 
     @Test
@@ -273,5 +288,30 @@ class GroundingCheckTest {
         // reduces it to the grounded root "address".
         val facts = GroundingCheck.factsOf("Your address is exposed to nearby apps.")
         assertTrue(GroundingCheck.isGrounded("Addresses can identify you.", facts))
+    }
+
+    @Test
+    fun stemBridgesTheIesAndEsPluralArms() {
+        assertTrue(
+            GroundingCheck.isGrounded("Batteries drain faster.", GroundingCheck.factsOf("Your battery drains faster.")),
+        )
+        assertTrue(
+            GroundingCheck.isGrounded("Watches can pair.", GroundingCheck.factsOf("Your watch can pair.")),
+        )
+        assertTrue(
+            GroundingCheck.isGrounded("Classes group your apps.", GroundingCheck.factsOf("Each class groups your apps.")),
+        )
+    }
+
+    @Test
+    fun stemLeavesSsAndUsAndIsRootsIntact() {
+        // These endings are singular, not plural markers — over-stripping them
+        // (access->acce, status->statu) would break cross-form matching.
+        assertTrue(
+            GroundingCheck.isGrounded("Access stays limited.", GroundingCheck.factsOf("Camera access is limited.")),
+        )
+        assertTrue(
+            GroundingCheck.isGrounded("Status looks normal.", GroundingCheck.factsOf("The status is normal.")),
+        )
     }
 }

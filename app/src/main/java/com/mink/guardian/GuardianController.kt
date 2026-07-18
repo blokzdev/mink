@@ -652,16 +652,11 @@ class GuardianController(
             // (the same [facts] string) — its numbers and any named surface must
             // trace back to them. If it fabricated a figure or a name, reject it
             // whole; the caller falls back to the deterministic FingerprintNarrative.
-            // The read is several sentences of warm summary, so ordinary capitalised
-            // openers ("None", "Overall") are exempt (skipSentenceInitial) — its named
-            // entities all come from [facts], which the deterministic report also names.
+            // Ordinary capitalised openers a warm summary uses ("None", "Overall")
+            // are handled by GroundingCheck's stoplist, so a fabricated name that
+            // opens a sentence is still caught rather than exempted by position.
             val grounded = read.isNotBlank() &&
-                GroundingCheck.isGrounded(
-                    read,
-                    GroundingCheck.factsOf(facts),
-                    checkEntities = true,
-                    skipSentenceInitial = true,
-                )
+                GroundingCheck.isGrounded(read, GroundingCheck.factsOf(facts), checkEntities = true)
             if (grounded) read else null
           }.getOrElse { if (it is CancellationException) throw it else null }
         }
@@ -922,12 +917,16 @@ class GuardianController(
         // deterministic text a fabrication or an empty reply drops to, so a budget
         // that trips only degrades quietly. Tunable copy/latency budgets, not lane-5
         // immutables. The companion remark is a background utterance (shortest
-        // budget); the read and chat are user-initiated (longer). Note the budget is
-        // enforced cooperatively — the timeout can only cancel between the engine's
-        // blocking native calls (each token, and the one-shot prompt prefill), so a
-        // single pathologically slow call can overrun it before the next check. On
-        // real hardware prefill is sub-second and tokens are quick, so in practice
-        // the budget bounds the dominant slow path (a long token stream).
+        // budget); the read and chat are user-initiated (longer). Two honest bounds:
+        // (1) the budget covers the wait for the engine's generation mutex plus the
+        // generation itself, so a surface contending for a busy engine can time out
+        // to its fallback having produced nothing — benign, since the fallback is the
+        // deterministic text either way. (2) Enforcement is cooperative — the timeout
+        // can only cancel between the engine's blocking native calls (each token, and
+        // the one-shot prompt prefill), so a single pathologically slow call can
+        // overrun it before the next check. On real hardware prefill is sub-second
+        // and tokens are quick, so in practice the budget bounds the dominant slow
+        // path (a long token stream).
         private const val REMARK_GEN_BUDGET_MS = 20_000L
         private const val NARRATION_GEN_BUDGET_MS = 40_000L
         private const val CHAT_GEN_BUDGET_MS = 60_000L
