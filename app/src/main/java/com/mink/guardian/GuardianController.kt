@@ -211,14 +211,6 @@ class GuardianController(
      */
     private val sweepMutex = Mutex()
 
-    /**
-     * Serialises chat turns. Two rapid sends would otherwise run concurrently —
-     * each appending its own in-flight reply and racing on [_chatLog] — so a turn
-     * waits here for the previous one to finish and commit before it reads history
-     * and streams. Sequential is the natural shape for a single on-device model.
-     */
-    private val chatMutex = Mutex()
-
     init {
         GuardianServiceHost.controller = this
 
@@ -589,9 +581,10 @@ class GuardianController(
     // ---- chat ----
 
     override fun chat(message: String): Flow<String> = flow {
-        // Serialise turns so two rapid sends never race on _chatLog or stream two
-        // replies at once; a turn reads the previous one's committed history.
-        chatMutex.withLock {
+        // Overlapping sends are safe without a lock: _chatLog mutations are atomic
+        // (StateFlow.update), and a streaming reply is excluded from both the
+        // persisted log and the prompt history, so interleaving can never persist
+        // or replay ungrounded text — only briefly show two live bubbles.
         val now = System.currentTimeMillis()
         val userMsg = ChatMessage(
             id = UUID.randomUUID().toString(),
@@ -694,7 +687,6 @@ class GuardianController(
         // committed non-streaming; this catches one stranded by a cancelled turn.
         scope.launch(Dispatchers.IO) {
             runCatching { persistence.saveChatLog(_chatLog.value.filterNot { it.streaming }) }
-        }
         }
     }.flowOn(Dispatchers.Default)
 
