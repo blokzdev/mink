@@ -327,6 +327,11 @@ class GuardianController(
                 val observationsAtStart = totalObservationsAdded
                 val freshAlertsAtStart = totalFreshAlertsAdded
 
+                // Everything from here to the notification pass runs inside a
+                // try/finally so SweepCompleted always pairs its SweepStarted — even
+                // if a core computation throws — and a bus consumer's bracket never
+                // strands. (The scanners already runCatching individually.)
+                try {
                 // Wait for the init restore so the notification gate reads the
                 // persisted settings, not defaults. Bounded so a wedged restore
                 // can never stall sweeps; after the timeout the gate runs with
@@ -534,14 +539,17 @@ class GuardianController(
                         runCatching { GuardianService.postAlertNotification(appContext, it) }
                         bus.emit(GuardianEvent.AlertNotified(it.id))
                     }
-
-                bus.emit(
-                    GuardianEvent.SweepCompleted(
-                        newObservations = (totalObservationsAdded - observationsAtStart).toInt(),
-                        newAlerts = (totalFreshAlertsAdded - freshAlertsAtStart).toInt(),
-                        durationMs = android.os.SystemClock.elapsedRealtime() - sweepStartElapsed,
-                    ),
-                )
+                } finally {
+                    // Counts are best-effort (whatever this sweep committed before any
+                    // throw); the duration always reflects the real elapsed span.
+                    bus.emit(
+                        GuardianEvent.SweepCompleted(
+                            newObservations = (totalObservationsAdded - observationsAtStart).toInt(),
+                            newAlerts = (totalFreshAlertsAdded - freshAlertsAtStart).toInt(),
+                            durationMs = android.os.SystemClock.elapsedRealtime() - sweepStartElapsed,
+                        ),
+                    )
+                }
             }
         }
     }

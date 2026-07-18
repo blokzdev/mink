@@ -49,7 +49,12 @@ sealed class GuardianEvent {
     /** A sweep began. */
     data class SweepStarted(val trigger: SweepTrigger) : GuardianEvent()
 
-    /** A sweep finished, with the counts it produced and how long it took. */
+    /**
+     * A sweep finished, with the counts it produced and how long it took. Always
+     * pairs a preceding [SweepStarted]; if the sweep threw partway, the counts are
+     * best-effort (only what it committed before the throw) while the duration is
+     * always the real elapsed span.
+     */
     data class SweepCompleted(
         val newObservations: Int,
         val newAlerts: Int,
