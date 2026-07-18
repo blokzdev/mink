@@ -11,6 +11,10 @@ import com.mink.core.model.FingerprintSignal
 import com.mink.core.model.SignalCategory
 import com.mink.data.LoadState
 import com.mink.data.SignalStore
+import com.mink.guardian.compose.Author
+import com.mink.guardian.compose.GroundedComposer
+import com.mink.guardian.compose.HybridSpec
+import com.mink.guardian.compose.SurfaceText
 import com.mink.guardian.llm.GenParams
 import com.mink.guardian.llm.LlamaBridge
 import com.mink.guardian.llm.LlmEngine
@@ -28,9 +32,11 @@ import com.mink.monitor.analyzeDataUsage
 import com.mink.monitor.dataUseWindow
 import com.mink.monitor.diffAppAccess
 import com.mink.monitor.diffHighRisk
+import com.mink.guardian.route.Mode
+import com.mink.guardian.route.ModeRouter
+import com.mink.guardian.route.Surface
 import com.mink.monitor.toSnapshot
 import com.mink.narrative.SummaryNarration
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -119,6 +125,13 @@ class GuardianController(
     private val sensorMonitor = SensorInUseMonitor(appContext) { tracked -> onSensorSession(tracked) }
 
     private val capability = DeviceCapability.detect(appContext, LlamaBridge.isAvailable)
+
+    /**
+     * The one gate between the generator and the hybrid text surfaces: budget,
+     * post-process, grounding check, deterministic fallback all live in core.
+     * The remark and narration delegations below only build [HybridSpec]s.
+     */
+    private val composer = GroundedComposer(generator)
 
     private val _state = MutableStateFlow(
         GuardianState(tier = capability.tier),
@@ -528,7 +541,8 @@ class GuardianController(
         _chatLog.update { current -> (current + userMsg + reply).takeLast(MAX_HISTORY) }
 
         val snapshot = store.signals.value
-        val useLlm = capability.tier != GuardianTier.RULES_ONLY && generator.isLoaded
+        val useLlm =
+            ModeRouter.resolve(Surface.CHAT, capability.tier, generator.isLoaded) == Mode.AGENT
 
         if (useLlm) {
             val thinking = capability.tier == GuardianTier.FULL
@@ -609,65 +623,68 @@ class GuardianController(
 
     /**
      * Author one calm companion remark for [alert] on the on-device model, or
-     * null to fall back to the alert title. A leaf with a deterministic fallback:
-     * the rules already picked the finding and the mood; the model only writes
-     * the sentence, and any failure or empty output degrades to the title. No
+     * null to fall back to the alert title. The router decides whether the model
+     * speaks at all — an immutable-rule alert is pinned to SCRIPT so the model
+     * never re-words a lane-5 finding — and the composer owns the budget, the
+     * post-process, the grounding gate, and the deterministic degrade. No
      * chat-log persistence — this is a side utterance, not a conversation turn.
      */
     override suspend fun composeRemark(alert: GuardianAlert): String? {
-        if (capability.tier == GuardianTier.RULES_ONLY || !generator.isLoaded) return null
-        return withTimeoutOrNull(REMARK_GEN_BUDGET_MS) {
-          runCatching {
-            val prompt = CompanionRemark.buildRemarkPrompt(alert)
-            val raw = StringBuilder()
-            generator
-                .generate(prompt, GenParams.noThink(maxTokens = CompanionRemark.REMARK_MAX_TOKENS))
-                .collect { raw.append(it) }
-            val remark = CompanionRemark.postProcessRemark(raw.toString())
-            // Grounding pass: the remark may name only the app/setting in this
-            // alert and cite only its numbers; if the model invented anything else,
-            // reject it whole and let the caller fall back to the alert title.
-            val grounded = remark.isNotBlank() &&
-                GroundingCheck.isGrounded(
-                    remark,
-                    GroundingCheck.factsOf(alert.title, alert.body),
-                    checkEntities = true,
-                )
-            if (grounded) remark else null
-          }.getOrElse { if (it is CancellationException) throw it else null }
-        }
+        val mode = ModeRouter.resolve(
+            Surface.COMPANION_REMARK,
+            capability.tier,
+            generator.isLoaded,
+            immutableAlert = alert.fromImmutableRule,
+        )
+        if (mode != Mode.HYBRID) return null
+        return composer.compose(
+            HybridSpec(
+                prompt = CompanionRemark.buildRemarkPrompt(alert),
+                facts = GroundingCheck.factsOf(alert.title, alert.body),
+                fallback = alert.title,
+                postProcess = CompanionRemark::postProcessRemark,
+                budgetMs = REMARK_GEN_BUDGET_MS,
+                params = GenParams.noThink(maxTokens = CompanionRemark.REMARK_MAX_TOKENS),
+            ),
+        ).modelTextOrNull()
     }
 
     /**
      * Author a grounded plain-language read of the fingerprint summary from a
      * pre-built [prompt] on the on-device model, or null to fall back to the
-     * deterministic narrative. A leaf with a deterministic fallback: the report is
-     * the grounded backbone shown alongside; the model only writes the prose, and
-     * any failure or empty output degrades to the narrative. No chat-log
-     * persistence — this is a side read, not a conversation turn.
+     * deterministic narrative. The composer owns the budget, the post-process,
+     * the grounding gate (the read's numbers and named surfaces must trace back
+     * to the same [facts] string the prompt was built from), and the
+     * deterministic degrade. No chat-log persistence — this is a side read, not
+     * a conversation turn.
      */
     override suspend fun narrate(prompt: String, facts: String): String? {
-        if (capability.tier == GuardianTier.RULES_ONLY || !generator.isLoaded) return null
-        return withTimeoutOrNull(NARRATION_GEN_BUDGET_MS) {
-          runCatching {
-            val raw = StringBuilder()
-            generator
-                .generate(prompt, GenParams.noThink(maxTokens = SummaryNarration.NARRATION_MAX_TOKENS))
-                .collect { raw.append(it) }
-            val read = SummaryNarration.postProcessNarration(raw.toString())
-            // Grounding pass: the read may cite only the facts the model was given
-            // (the same [facts] string) — its numbers and any named surface must
-            // trace back to them. If it fabricated a figure or a name, reject it
-            // whole; the caller falls back to the deterministic FingerprintNarrative.
-            // Ordinary capitalised openers a warm summary uses ("None", "Overall")
-            // are handled by GroundingCheck's stoplist, so a fabricated name that
-            // opens a sentence is still caught rather than exempted by position.
-            val grounded = read.isNotBlank() &&
-                GroundingCheck.isGrounded(read, GroundingCheck.factsOf(facts), checkEntities = true)
-            if (grounded) read else null
-          }.getOrElse { if (it is CancellationException) throw it else null }
-        }
+        val mode = ModeRouter.resolve(Surface.SUMMARY_NARRATION, capability.tier, generator.isLoaded)
+        if (mode != Mode.HYBRID) return null
+        return composer.compose(
+            HybridSpec(
+                prompt = prompt,
+                // This surface's deterministic text (the report detail) lives with
+                // the caller, which substitutes it on null — so the spec's fallback
+                // is never displayed and stays empty. modelTextOrNull maps the
+                // composer's DETERMINISTIC result back to the contract's null.
+                facts = GroundingCheck.factsOf(facts),
+                fallback = "",
+                postProcess = SummaryNarration::postProcessNarration,
+                budgetMs = NARRATION_GEN_BUDGET_MS,
+                params = GenParams.noThink(maxTokens = SummaryNarration.NARRATION_MAX_TOKENS),
+            ),
+        ).modelTextOrNull()
     }
+
+    /**
+     * Map a composed surface text back to this interface's `String?` contract:
+     * model-authored prose passes through, a deterministic result becomes null
+     * so each caller applies its own fallback (the alert title, the report
+     * detail) exactly as before the composer existed.
+     */
+    private fun SurfaceText.modelTextOrNull(): String? =
+        if (author == Author.MODEL_GROUNDED) text else null
 
     // ---- internals ----
 
