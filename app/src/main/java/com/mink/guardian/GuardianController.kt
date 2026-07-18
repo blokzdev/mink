@@ -581,6 +581,10 @@ class GuardianController(
     // ---- chat ----
 
     override fun chat(message: String): Flow<String> = flow {
+        // Overlapping sends are safe without a lock: _chatLog mutations are atomic
+        // (StateFlow.update), and a streaming reply is excluded from both the
+        // persisted log and the prompt history, so interleaving can never persist
+        // or replay ungrounded text — only briefly show two live bubbles.
         val now = System.currentTimeMillis()
         val userMsg = ChatMessage(
             id = UUID.randomUUID().toString(),
@@ -608,13 +612,9 @@ class GuardianController(
 
         if (useLlm) {
             val thinking = capability.tier == GuardianTier.FULL
-            val turns = historyBefore.takeLast(MAX_HISTORY_TURNS).mapNotNull { m ->
-                when (m.role) {
-                    ChatRole.USER -> MiniCpmChatFormat.Turn(MiniCpmChatFormat.ROLE_USER, m.content)
-                    ChatRole.GUARDIAN -> MiniCpmChatFormat.Turn(MiniCpmChatFormat.ROLE_ASSISTANT, m.content)
-                    ChatRole.SYSTEM -> null
-                }
-            }
+            // History excludes streaming (in-flight) messages, so a reply stranded
+            // by a cancelled or overlapping turn never re-enters the prompt as fact.
+            val turns = MiniCpmChatFormat.turnsFrom(historyBefore, MAX_HISTORY_TURNS)
             val prompt = MiniCpmChatFormat.buildPrompt(systemPrompt(), turns, message, thinking)
             val params = if (thinking) GenParams.think() else GenParams.noThink()
 
@@ -681,7 +681,13 @@ class GuardianController(
         }
 
         updateMessage(reply)
-        scope.launch(Dispatchers.IO) { runCatching { persistence.saveChatLog(_chatLog.value) } }
+        // Never persist an in-flight (streaming) message: its content is an
+        // ungrounded provisional draft that must not become the durable record or
+        // re-enter the next prompt. On the normal path the reply is already
+        // committed non-streaming; this catches one stranded by a cancelled turn.
+        scope.launch(Dispatchers.IO) {
+            runCatching { persistence.saveChatLog(_chatLog.value.filterNot { it.streaming }) }
+        }
     }.flowOn(Dispatchers.Default)
 
     /**

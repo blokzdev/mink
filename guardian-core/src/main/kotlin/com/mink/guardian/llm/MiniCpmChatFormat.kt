@@ -1,5 +1,8 @@
 package com.mink.guardian.llm
 
+import com.mink.guardian.ChatMessage
+import com.mink.guardian.ChatRole
+
 /**
  * Builds and parses the MiniCPM5 chat template. The template wraps each turn in
  * `<|im_start|>role\n...<|im_end|>` markers and ends on an open assistant turn
@@ -63,6 +66,26 @@ object MiniCpmChatFormat {
         userMessage: String,
         enableThinking: Boolean,
     ): String = buildPrompt(systemPrompt, emptyList(), userMessage, enableThinking)
+
+    /**
+     * Build the prior-conversation [Turn]s for [buildPrompt] from a chat [log],
+     * keeping only the newest [maxTurns]. **Streaming (in-flight) messages are
+     * excluded**: their content is an ungrounded provisional draft, so it must
+     * never re-enter the model's prompt as authoritative history — a cancelled or
+     * stranded reply left in the log would otherwise be quoted back to the model as
+     * fact. System messages carry no turn. Pure, so the exclusion is unit-tested
+     * off Android.
+     */
+    fun turnsFrom(log: List<ChatMessage>, maxTurns: Int): List<Turn> =
+        log.filterNot { it.streaming }
+            .takeLast(maxTurns)
+            .mapNotNull { m ->
+                when (m.role) {
+                    ChatRole.USER -> Turn(ROLE_USER, m.content)
+                    ChatRole.GUARDIAN -> Turn(ROLE_ASSISTANT, m.content)
+                    ChatRole.SYSTEM -> null
+                }
+            }
 
     /**
      * Append one `<|im_start|>role\n...<|im_end|>` turn. The [content] is
