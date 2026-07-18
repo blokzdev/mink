@@ -1,11 +1,13 @@
 package com.mink.data
 
 import android.content.Context
+import android.util.Log
 import com.mink.companion.Companion
 import com.mink.guardian.Guardian
 import com.mink.monitor.AppAccessMonitor
 import com.mink.monitor.DnsFlowMonitor
 import com.mink.monitor.NetworkUsageMonitor
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -29,7 +31,18 @@ object ServiceWiring {
 
     fun build(context: Context): MinkServices {
         val appContext = context.applicationContext
-        val appScope = CoroutineScope(SupervisorJob())
+        // A background guardian must degrade, not crash. The SupervisorJob keeps one
+        // subsystem's failure from cancelling its siblings; the handler is the safety
+        // net for an *uncaught* throw in a launched job (e.g. a sweep computation the
+        // per-step runCatching does not cover) — without it that reaches the process's
+        // default uncaught handler and takes the app down. It logs to device logcat
+        // only (never egress) so a real bug is still visible while the app survives.
+        val appScope = CoroutineScope(
+            SupervisorJob() +
+                CoroutineExceptionHandler { _, throwable ->
+                    Log.e(LOG_TAG, "Uncaught exception in the guardian scope; degrading", throwable)
+                },
+        )
         val permissions = PermissionController(appContext)
         val store = SignalStore(appContext, appScope, permissions)
 
@@ -62,4 +75,6 @@ object ServiceWiring {
         services.companion?.disable()
         services.appScope.cancel()
     }
+
+    private const val LOG_TAG = "Mink"
 }
