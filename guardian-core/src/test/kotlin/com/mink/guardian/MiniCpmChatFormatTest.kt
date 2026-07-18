@@ -111,4 +111,48 @@ class MiniCpmChatFormatTest {
         // The <think> tag folded into the persona was stripped too.
         assertFalse(prompt.contains(MiniCpmChatFormat.THINK_OPEN))
     }
+
+    // ---- turnsFrom ----
+
+    private fun msg(role: ChatRole, content: String, streaming: Boolean = false) =
+        ChatMessage(id = content, role = role, content = content, epochMs = 0L, streaming = streaming)
+
+    @Test
+    fun turnsFrom_mapsRolesAndDropsSystem() {
+        val log = listOf(
+            msg(ChatRole.SYSTEM, "sys"),
+            msg(ChatRole.USER, "hi"),
+            msg(ChatRole.GUARDIAN, "hello"),
+        )
+        assertEquals(
+            listOf(
+                MiniCpmChatFormat.Turn(MiniCpmChatFormat.ROLE_USER, "hi"),
+                MiniCpmChatFormat.Turn(MiniCpmChatFormat.ROLE_ASSISTANT, "hello"),
+            ),
+            MiniCpmChatFormat.turnsFrom(log, maxTurns = 8),
+        )
+    }
+
+    @Test
+    fun turnsFrom_excludesStreamingMessages() {
+        // A stranded in-flight reply (ungrounded provisional text) must never
+        // re-enter the prompt as authoritative history.
+        val log = listOf(
+            msg(ChatRole.USER, "real question"),
+            msg(ChatRole.GUARDIAN, "ungrounded draft: you used 5 GB", streaming = true),
+        )
+        assertEquals(
+            listOf(MiniCpmChatFormat.Turn(MiniCpmChatFormat.ROLE_USER, "real question")),
+            MiniCpmChatFormat.turnsFrom(log, maxTurns = 8),
+        )
+    }
+
+    @Test
+    fun turnsFrom_keepsOnlyTheNewestMaxTurnsAfterExcludingStreaming() {
+        val log = (1..10).map { msg(ChatRole.USER, "u$it") } +
+            msg(ChatRole.GUARDIAN, "streaming", streaming = true)
+        val turns = MiniCpmChatFormat.turnsFrom(log, maxTurns = 3)
+        // The streaming tail is excluded first, so the newest 3 are u8, u9, u10.
+        assertEquals(listOf("u8", "u9", "u10"), turns.map { it.content })
+    }
 }

@@ -211,6 +211,14 @@ class GuardianController(
      */
     private val sweepMutex = Mutex()
 
+    /**
+     * Serialises chat turns. Two rapid sends would otherwise run concurrently —
+     * each appending its own in-flight reply and racing on [_chatLog] — so a turn
+     * waits here for the previous one to finish and commit before it reads history
+     * and streams. Sequential is the natural shape for a single on-device model.
+     */
+    private val chatMutex = Mutex()
+
     init {
         GuardianServiceHost.controller = this
 
@@ -581,6 +589,9 @@ class GuardianController(
     // ---- chat ----
 
     override fun chat(message: String): Flow<String> = flow {
+        // Serialise turns so two rapid sends never race on _chatLog or stream two
+        // replies at once; a turn reads the previous one's committed history.
+        chatMutex.withLock {
         val now = System.currentTimeMillis()
         val userMsg = ChatMessage(
             id = UUID.randomUUID().toString(),
@@ -608,13 +619,9 @@ class GuardianController(
 
         if (useLlm) {
             val thinking = capability.tier == GuardianTier.FULL
-            val turns = historyBefore.takeLast(MAX_HISTORY_TURNS).mapNotNull { m ->
-                when (m.role) {
-                    ChatRole.USER -> MiniCpmChatFormat.Turn(MiniCpmChatFormat.ROLE_USER, m.content)
-                    ChatRole.GUARDIAN -> MiniCpmChatFormat.Turn(MiniCpmChatFormat.ROLE_ASSISTANT, m.content)
-                    ChatRole.SYSTEM -> null
-                }
-            }
+            // History excludes streaming (in-flight) messages, so a reply stranded
+            // by a cancelled or overlapping turn never re-enters the prompt as fact.
+            val turns = MiniCpmChatFormat.turnsFrom(historyBefore, MAX_HISTORY_TURNS)
             val prompt = MiniCpmChatFormat.buildPrompt(systemPrompt(), turns, message, thinking)
             val params = if (thinking) GenParams.think() else GenParams.noThink()
 
@@ -681,7 +688,14 @@ class GuardianController(
         }
 
         updateMessage(reply)
-        scope.launch(Dispatchers.IO) { runCatching { persistence.saveChatLog(_chatLog.value) } }
+        // Never persist an in-flight (streaming) message: its content is an
+        // ungrounded provisional draft that must not become the durable record or
+        // re-enter the next prompt. On the normal path the reply is already
+        // committed non-streaming; this catches one stranded by a cancelled turn.
+        scope.launch(Dispatchers.IO) {
+            runCatching { persistence.saveChatLog(_chatLog.value.filterNot { it.streaming }) }
+        }
+        }
     }.flowOn(Dispatchers.Default)
 
     /**
