@@ -1,9 +1,21 @@
 # Mink architecture
 
-Mink is a single-module Android app (`:app`) written in Kotlin with Jetpack
-Compose and Material 3. It has three cooperating subsystems built on one shared
-core: the **signals** layer (the fingerprinting surface), the **guardian**
-(on-device analysis and chat), and the **companion** (the floating overlay).
+Mink is an Android app written in Kotlin with Jetpack Compose and Material 3,
+split across two Gradle modules: **`:app`** (everything Android-touching — the
+Compose UI, services, scanners/monitors, the `llama.cpp` engine, and
+persistence) and **`:guardian-core`** (a pure-JVM module holding all
+deterministic guardian logic: rules, guards, baseline, grounding, the mode
+router, the grounded composer, and the narrative/companion text logic, with no
+Android SDK on its classpath, so it runs as plain JVM unit tests). The compiler
+enforces the boundary, and package names are identical across the split. It has
+three cooperating subsystems built on one shared core: the **signals** layer
+(the fingerprinting surface), the **guardian** (on-device analysis and chat),
+and the **companion** (the floating overlay).
+
+The guardian's ongoing reorganization around a grounded composer, a four-mode
+router, and a typed event bus — and the module split above — is specified in
+[design/guardian-core-refactor.md](design/guardian-core-refactor.md); the guardian
+sections below describe the behaviour, which that refactor preserves.
 
 ```
 com.mink
