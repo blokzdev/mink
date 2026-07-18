@@ -14,39 +14,22 @@ import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
 
 /**
- * Sampling parameters for one generation. The temperature and top-p defaults
- * follow the MiniCPM5 deploy guidance: thinking runs a little hotter for
- * exploratory reasoning, no-think stays tighter for direct answers.
- */
-data class GenParams(
-    val temperature: Float,
-    val topP: Float,
-    val maxTokens: Int = 512,
-    val thinking: Boolean = false,
-) {
-    companion object {
-        fun think(maxTokens: Int = 768) =
-            GenParams(temperature = 0.9f, topP = 0.95f, maxTokens = maxTokens, thinking = true)
-
-        fun noThink(maxTokens: Int = 512) =
-            GenParams(temperature = 0.7f, topP = 0.95f, maxTokens = maxTokens, thinking = false)
-    }
-}
-
-/**
- * High-level wrapper over [LlamaBridge]. All native calls run on a single
- * dedicated thread because a llama.cpp context is not safe to touch from more
- * than one thread at a time. Two layers guard the shared context: the
- * dispatcher serialises individual native calls onto that one thread, and
- * [genMutex] serialises whole generations and load/unload so they never
- * interleave on the shared handle and KV cache. The mutex matters because a
- * flow suspends at emit under backpressure, which frees the thread and would
- * otherwise let a second generation start priming the same context mid-stream.
+ * High-level wrapper over [LlamaBridge], the concrete [TextGenerator]. All
+ * native calls run on a single dedicated thread because a llama.cpp context is
+ * not safe to touch from more than one thread at a time. Two layers guard the
+ * shared context: the dispatcher serialises individual native calls onto that
+ * one thread, and [genMutex] serialises whole generations and load/unload so
+ * they never interleave on the shared handle and KV cache. The mutex matters
+ * because a flow suspends at emit under backpressure, which frees the thread
+ * and would otherwise let a second generation start priming the same context
+ * mid-stream.
  *
  * Every method is exception-safe. If the native bridge is absent the engine
- * simply never loads and callers fall back to the rules engine.
+ * simply never loads and callers fall back to the rules engine. Lifecycle
+ * ([load]/[unload]/[isBridgeAvailable]) is deliberately not part of
+ * [TextGenerator] — the controller owns it against this concrete type.
  */
-class LlmEngine {
+class LlmEngine : TextGenerator {
 
     private val executor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "mink-llm").apply { isDaemon = true }
@@ -62,7 +45,7 @@ class LlmEngine {
     @Volatile
     private var handle: Long = 0L
 
-    val isLoaded: Boolean
+    override val isLoaded: Boolean
         get() = handle != 0L
 
     val isBridgeAvailable: Boolean
@@ -99,7 +82,7 @@ class LlmEngine {
      * dedicated thread, honours cancellation between tokens, and completes when
      * the model emits end of stream or [GenParams.maxTokens] is reached.
      */
-    fun generate(prompt: String, params: GenParams): Flow<String> = flow {
+    override fun generate(prompt: String, params: GenParams): Flow<String> = flow {
         genMutex.withLock<Unit> {
             if (handle == 0L || !LlamaBridge.isAvailable) return@withLock
             val primed = runCatching { LlamaBridge.nativePrompt(handle, prompt) }.getOrDefault(-1)
