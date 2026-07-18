@@ -577,20 +577,26 @@ class GuardianController(
             // Show-then-correct: Deltas stream the provisional draft to the UI and
             // the observed chatLog; the single Final carries the authoritative
             // reply (grounded prose or fallback) that becomes the committed record.
-            val visible = StringBuilder()
+            // Each Delta's visibleSoFar is the whole parsed reply so far, assigned
+            // straight onto the message (exactly the old reply.content = parsed
+            // .content); lastEmitted tracks what the token stream has already
+            // yielded so it emits only the newly-grown suffix.
+            var lastEmitted = ""
             composer.agent(spec).collect { event ->
                 when (event) {
                     is AgentEvent.Delta -> {
-                        if (event.visibleDelta.isNotEmpty()) visible.append(event.visibleDelta)
-                        reply = reply.copy(content = visible.toString(), thinking = event.thinkingSoFar)
+                        reply = reply.copy(content = event.visibleSoFar, thinking = event.thinkingSoFar)
                         updateMessage(reply)
-                        if (event.visibleDelta.isNotEmpty()) emit(event.visibleDelta)
+                        if (event.visibleSoFar.length > lastEmitted.length) {
+                            emit(event.visibleSoFar.substring(lastEmitted.length))
+                            lastEmitted = event.visibleSoFar
+                        }
                     }
                     is AgentEvent.Final -> {
                         reply = reply.commit(event.reply)
                         // If nothing streamed (empty or think-only output), surface
                         // the final content so the caller's flow still yields a reply.
-                        if (visible.isEmpty() && reply.content.isNotEmpty()) emit(reply.content)
+                        if (lastEmitted.isEmpty() && reply.content.isNotEmpty()) emit(reply.content)
                     }
                 }
             }

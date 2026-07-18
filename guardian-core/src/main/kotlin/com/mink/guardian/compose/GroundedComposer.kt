@@ -109,18 +109,15 @@ class GroundedComposer(generator: TextGenerator) {
      */
     fun agent(spec: AgentSpec): Flow<AgentEvent> = flow {
         val raw = StringBuilder()
-        var lastVisible = ""
         val completed = withTimeoutOrNull(spec.budgetMs) {
             runCatching {
                 runner.stream(spec.prompt, spec.params).collect { piece ->
                     raw.append(piece)
+                    // Emit the whole parsed reply so far, not an increment, so a
+                    // consumer's displayed draft tracks the model's own parse even
+                    // when it is non-monotonic (a trailing fragment scrubbed away).
                     val parsed = MiniCpmChatFormat.parseReply(raw.toString())
-                    val delta = if (parsed.content.length > lastVisible.length) {
-                        parsed.content.substring(lastVisible.length).also { lastVisible = parsed.content }
-                    } else {
-                        ""
-                    }
-                    emit(AgentEvent.Delta(delta, parsed.thinking))
+                    emit(AgentEvent.Delta(parsed.content, parsed.thinking))
                 }
             }.getOrElse { if (it is CancellationException) throw it else return@withTimeoutOrNull false }
             true

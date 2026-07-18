@@ -46,17 +46,31 @@ class AgentComposerTest {
 
     private fun List<AgentEvent>.deltas() = filterIsInstance<AgentEvent.Delta>()
     private fun List<AgentEvent>.finals() = filterIsInstance<AgentEvent.Final>()
-    private fun List<AgentEvent>.visible() =
-        deltas().joinToString("") { it.visibleDelta }
+
+    /** The visible reply the deltas ended on — the last cumulative snapshot. */
+    private fun List<AgentEvent>.visible() = deltas().lastOrNull()?.visibleSoFar ?: ""
+
+    /** Assert the terminal-event invariant: exactly one Final, and it is last. */
+    private fun List<AgentEvent>.assertOneFinalLast() {
+        assertEquals("exactly one Final", 1, finals().size)
+        assertSame("the Final must be the last event", last(), finals().first())
+    }
 
     // ---- the terminal-event invariant ----
 
     @Test
     fun everyRunEndsWithExactlyOneFinalAsTheLastEvent() = runTest {
         val fake = FakeTextGenerator(Behavior.Tokens(listOf("Your battery ", "is at 82 percent.")))
+        GroundedComposer(fake).agent(chatSpec()).toList().assertOneFinalLast()
+    }
+
+    @Test
+    fun theTerminalInvariantHoldsOnAFailurePathToo() = runTest {
+        // A fabricated figure takes the fallback branch — still exactly one Final, last.
+        val fake = FakeTextGenerator(Behavior.Tokens(listOf("Your battery reads 37 percent.")))
         val events = GroundedComposer(fake).agent(chatSpec()).toList()
-        assertEquals(1, events.finals().size)
-        assertSame("the Final must be the last event", events.last(), events.finals().first())
+        events.assertOneFinalLast()
+        assertTrue(events.finals().first().reply is FinalReply.Fallback)
     }
 
     // ---- the grounded happy path ----
@@ -141,11 +155,19 @@ class AgentComposerTest {
     }
 
     @Test
-    fun thinkOnlyOutputFallsBack() = runTest {
-        // Reasoning with no visible answer scrubs to blank content -> fallback.
+    fun thinkOnlyOutputFallsBackAndStillCarriesTheReasoning() = runTest {
+        // Reasoning with no visible answer scrubs to blank content -> fallback,
+        // but the reasoning itself is preserved and no visible text ever leaked.
         val fake = FakeTextGenerator(Behavior.Tokens(listOf("<think>", "still reasoning about the battery")))
-        val final = GroundedComposer(fake).agent(chatSpec()).toList().finals().first().reply
+        val events = GroundedComposer(fake).agent(chatSpec()).toList()
+        assertEquals("no visible text may leak while only reasoning streamed", "", events.visible())
+        val final = events.finals().first().reply
         assertTrue(final is FinalReply.Fallback)
+        assertEquals(
+            "the fallback carries the reasoning so far",
+            "still reasoning about the battery",
+            (final as FinalReply.Fallback).thinking,
+        )
     }
 
     @Test
@@ -160,9 +182,13 @@ class AgentComposerTest {
     fun anEngineExceptionFallsBackInsteadOfPropagating() = runTest {
         // The deliberate deviation from literal old-chat parity: the old path had
         // no guard and would crash the collecting scope, stranding a streaming
-        // message. Now the partial stream is corrected to the fallback.
+        // message. Now the partial stream is corrected to the fallback — and the
+        // "half-streamed then corrected" behavior means a provisional delta really
+        // did stream before the failure.
         val fake = FakeTextGenerator(Behavior.Fail(after = listOf("Your battery ")))
         val events = GroundedComposer(fake).agent(chatSpec()).toList()
+        assertEquals("the partial reply streamed before the failure", "Your battery", events.visible())
+        events.assertOneFinalLast()
         assertTrue(events.finals().first().reply is FinalReply.Fallback)
     }
 

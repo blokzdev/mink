@@ -42,11 +42,16 @@ class AgentSpec(
  */
 sealed interface AgentEvent {
     /**
-     * A streamed increment: [visibleDelta] is the new visible text (empty while
-     * the model is still inside its reasoning block), [thinkingSoFar] the
-     * reasoning accumulated to this point.
+     * A streamed update: [visibleSoFar] is the whole visible reply parsed so far
+     * (empty while the model is still inside its reasoning block), [thinkingSoFar]
+     * the reasoning accumulated to this point. Both are cumulative snapshots, not
+     * increments — a consumer assigns them, it does not append. Carrying the full
+     * parsed text (rather than a length-based increment) is what keeps the live
+     * draft correct when the model's own chat parse is non-monotonic: a trailing
+     * fragment that later scrubs away shrinks [visibleSoFar] back, where an
+     * increment could only ever grow and would strand the fragment.
      */
-    data class Delta(val visibleDelta: String, val thinkingSoFar: String?) : AgentEvent
+    data class Delta(val visibleSoFar: String, val thinkingSoFar: String?) : AgentEvent
 
     /** The terminal event. Always emitted, always exactly once, always last. */
     data class Final(val reply: FinalReply) : AgentEvent
