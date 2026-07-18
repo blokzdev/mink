@@ -2,8 +2,11 @@ package com.mink.guardian.compose
 
 import com.mink.guardian.GroundingCheck
 import com.mink.guardian.llm.GenParams
+import com.mink.guardian.llm.MiniCpmChatFormat
 import com.mink.guardian.llm.TextGenerator
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -18,6 +21,14 @@ internal class GenerationRunner(private val generator: TextGenerator) {
         generator.generate(prompt, params).collect { raw.append(it) }
         return Draft(raw.toString())
     }
+
+    /**
+     * The raw token stream for a generation, for the streaming (agent) path.
+     * Keeps the generator confined to this class — the composer's [agent]
+     * parses and gates these tokens; they only reach the user as an advisory
+     * live draft, never as a persisted record.
+     */
+    fun stream(prompt: String, params: GenParams): Flow<String> = generator.generate(prompt, params)
 }
 
 /**
@@ -74,5 +85,56 @@ class GroundedComposer(generator: TextGenerator) {
         if (processed.isBlank()) return null
         if (!GroundingCheck.isGrounded(processed, spec.facts, checkEntities = true)) return null
         return GroundedProse.fromGate(processed)
+    }
+
+    /**
+     * Run one agent-mode (chat) generation: stream the visible reply as tokens
+     * arrive, then close with exactly one [AgentEvent.Final] carrying the
+     * authoritative reply — grounded model prose if the stream finished inside
+     * the budget, was non-blank, and every cited figure traced back to the
+     * spec's facts (numbers-only; entities are not checked over so broad a
+     * ground truth), or the deterministic fallback otherwise.
+     *
+     * Show-then-correct: the [AgentEvent.Delta]s are the provisional draft the
+     * live bubble may show; the [AgentEvent.Final] is the record. A [Delta] is a
+     * distinct type no persistence path accepts, so unchecked model text can
+     * reach the bubble but never the saved log.
+     *
+     * Failure handling matches [compose]: budget elapse, blank/think-only
+     * output, a fabricated figure, and an engine exception all resolve to
+     * [FinalReply.Fallback]; only caller cancellation propagates (a cancelled
+     * chat produces no terminal event, not a fallback). The engine-exception
+     * guard is deliberate — the pre-composer chat path lacked it and could
+     * strand a half-streamed message; the remark and read paths always had it.
+     */
+    fun agent(spec: AgentSpec): Flow<AgentEvent> = flow {
+        val raw = StringBuilder()
+        var lastVisible = ""
+        val completed = withTimeoutOrNull(spec.budgetMs) {
+            runCatching {
+                runner.stream(spec.prompt, spec.params).collect { piece ->
+                    raw.append(piece)
+                    val parsed = MiniCpmChatFormat.parseReply(raw.toString())
+                    val delta = if (parsed.content.length > lastVisible.length) {
+                        parsed.content.substring(lastVisible.length).also { lastVisible = parsed.content }
+                    } else {
+                        ""
+                    }
+                    emit(AgentEvent.Delta(delta, parsed.thinking))
+                }
+            }.getOrElse { if (it is CancellationException) throw it else return@withTimeoutOrNull false }
+            true
+        } ?: false
+
+        val finalParsed = MiniCpmChatFormat.parseReply(raw.toString())
+        val candidate = finalParsed.content
+        val reply = if (completed && candidate.isNotBlank() &&
+            GroundingCheck.isGrounded(candidate, spec.facts, checkEntities = false)
+        ) {
+            FinalReply.Grounded(GroundedProse.fromGate(candidate), finalParsed.thinking)
+        } else {
+            FinalReply.Fallback(spec.fallback, finalParsed.thinking)
+        }
+        emit(AgentEvent.Final(reply))
     }
 }
