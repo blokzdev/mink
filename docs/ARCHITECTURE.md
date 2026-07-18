@@ -80,6 +80,15 @@ manages live streaming subscriptions per open detail screen.
 
 ## The guardian
 
+The deterministic heart of the guardian — rules, guards, baseline, grounding,
+the four-mode router, the grounded composer, and the typed event bus — lives in
+the pure-JVM `:guardian-core` module, documented in
+[guardian-core.md](guardian-core.md). `GuardianController` (in `:app`) is the
+Android adapter over it: it owns the StateFlows, the sweep loop, model
+lifecycle, and the bus, and threads every text surface through the composer and
+every routing decision through `ModeRouter`. The sections below describe the
+guardian's behaviour, which that structure preserves.
+
 `GuardianController` implements the `Guardian` interface. On enable it:
 
 1. Detects device capability (RAM, cores, ABI) and picks a `GuardianTier`.
@@ -91,10 +100,17 @@ manages live streaming subscriptions per open detail screen.
    service) that snapshot signals, diff them over time in `GuardianAnalyzer`, and
    raise `Observation`s and `GuardianAlert`s.
 
-Chat is routed through `LlmEngine`, which formats prompts with the MiniCPM5
-`<|im_start|>` template and supports the hybrid `<think>` mode. When no model is
-available every guardian capability still works through the deterministic rules
-engine, so the feature never hard-fails.
+Every model-authored surface — the chat reply, the companion remark, the summary
+read — goes through the `GroundedComposer` in `:guardian-core`: the model writes
+prose, the composer checks every concrete claim against ground truth
+(`GroundingCheck`) and falls back to deterministic text on any fabrication,
+budget elapse, or failure. `ModeRouter` decides, in one place, whether each
+surface speaks with the model at all. The concrete `LlmEngine` (behind the
+`TextGenerator` seam) formats prompts with the MiniCPM5 `<|im_start|>` template
+and supports the hybrid `<think>` mode. When no model is available every guardian
+capability still works through the deterministic rules engine, so the feature
+never hard-fails. See [guardian-core.md](guardian-core.md) for the composer,
+router, and event-bus seams.
 
 ### Learned baseline
 
