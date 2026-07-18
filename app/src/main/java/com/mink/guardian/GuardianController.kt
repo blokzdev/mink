@@ -528,7 +528,10 @@ class GuardianController(
                         )
                     }
                     .forEach {
-                        GuardianService.postAlertNotification(appContext, it)
+                        // A failed OS notification post must not abort the sweep (which
+                        // would strand a bus consumer's SweepStarted..SweepCompleted
+                        // bracket); the gate still decided to notify, so the receipt fires.
+                        runCatching { GuardianService.postAlertNotification(appContext, it) }
                         bus.emit(GuardianEvent.AlertNotified(it.id))
                     }
 
