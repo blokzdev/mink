@@ -15,6 +15,7 @@ import com.mink.guardian.llm.GenParams
 import com.mink.guardian.llm.LlamaBridge
 import com.mink.guardian.llm.LlmEngine
 import com.mink.guardian.llm.MiniCpmChatFormat
+import com.mink.guardian.llm.TextGenerator
 import com.mink.monitor.AppAccessScanner
 import com.mink.monitor.DataUseDecision
 import com.mink.monitor.DnsFlowHub
@@ -58,12 +59,18 @@ class GuardianController(
     context: Context,
     private val store: SignalStore,
     private val scope: CoroutineScope,
+    // The concrete engine owns model LIFECYCLE (load/unload/tier sizing) — an
+    // Android/native concern that stays off the generation seam. The generator
+    // is the GENERATION seam every text surface speaks through; it defaults to
+    // the same engine, and tests inject a fake here to drive the chat/remark/
+    // narrate paths (budgets, grounding, fallbacks) on a plain JVM.
+    private val llmEngine: LlmEngine = LlmEngine(),
+    private val generator: TextGenerator = llmEngine,
 ) : Guardian {
 
     private val appContext = context.applicationContext
     private val persistence = GuardianStore(appContext)
     private val modelManager = ModelManager(appContext)
-    private val llmEngine = LlmEngine()
     private val rules = RulesEngine()
     private val analyzer = GuardianAnalyzer(rules)
 
@@ -521,7 +528,7 @@ class GuardianController(
         _chatLog.update { current -> (current + userMsg + reply).takeLast(MAX_HISTORY) }
 
         val snapshot = store.signals.value
-        val useLlm = capability.tier != GuardianTier.RULES_ONLY && llmEngine.isLoaded
+        val useLlm = capability.tier != GuardianTier.RULES_ONLY && generator.isLoaded
 
         if (useLlm) {
             val thinking = capability.tier == GuardianTier.FULL
@@ -541,7 +548,7 @@ class GuardianController(
             // budget elapses mid-reply we stop and fall back to the deterministic
             // answer below, replacing the partial draft (show-then-correct).
             val completed = withTimeoutOrNull(CHAT_GEN_BUDGET_MS) {
-                llmEngine.generate(prompt, params).collect { piece ->
+                generator.generate(prompt, params).collect { piece ->
                     raw.append(piece)
                     val parsed = MiniCpmChatFormat.parseReply(raw.toString())
                     reply = reply.copy(content = parsed.content, thinking = parsed.thinking)
@@ -608,12 +615,12 @@ class GuardianController(
      * chat-log persistence — this is a side utterance, not a conversation turn.
      */
     override suspend fun composeRemark(alert: GuardianAlert): String? {
-        if (capability.tier == GuardianTier.RULES_ONLY || !llmEngine.isLoaded) return null
+        if (capability.tier == GuardianTier.RULES_ONLY || !generator.isLoaded) return null
         return withTimeoutOrNull(REMARK_GEN_BUDGET_MS) {
           runCatching {
             val prompt = CompanionRemark.buildRemarkPrompt(alert)
             val raw = StringBuilder()
-            llmEngine
+            generator
                 .generate(prompt, GenParams.noThink(maxTokens = CompanionRemark.REMARK_MAX_TOKENS))
                 .collect { raw.append(it) }
             val remark = CompanionRemark.postProcessRemark(raw.toString())
@@ -640,11 +647,11 @@ class GuardianController(
      * persistence — this is a side read, not a conversation turn.
      */
     override suspend fun narrate(prompt: String, facts: String): String? {
-        if (capability.tier == GuardianTier.RULES_ONLY || !llmEngine.isLoaded) return null
+        if (capability.tier == GuardianTier.RULES_ONLY || !generator.isLoaded) return null
         return withTimeoutOrNull(NARRATION_GEN_BUDGET_MS) {
           runCatching {
             val raw = StringBuilder()
-            llmEngine
+            generator
                 .generate(prompt, GenParams.noThink(maxTokens = SummaryNarration.NARRATION_MAX_TOKENS))
                 .collect { raw.append(it) }
             val read = SummaryNarration.postProcessNarration(raw.toString())
