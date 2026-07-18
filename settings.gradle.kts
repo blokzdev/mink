@@ -22,3 +22,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Mink"
 include(":app")
+include(":guardian-core")

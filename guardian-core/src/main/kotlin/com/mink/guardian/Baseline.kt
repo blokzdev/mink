@@ -403,7 +403,7 @@ fun learningDurationPhrase(learningSinceMs: Long, nowMs: Long): String {
  * the whole block is kept well under 500 chars (nCtx is 1024-2048). [nowMs]
  * defaults to the wall clock but is injectable for testing.
  */
-internal fun rhythmDigest(summary: BaselineSummary, nowMs: Long = System.currentTimeMillis()): String {
+fun rhythmDigest(summary: BaselineSummary, nowMs: Long = System.currentTimeMillis()): String {
     if (!summary.isMature) return ""
     val duration = learningDurationPhrase(summary.learningSinceMs, nowMs)
     val drifting = summary.driftingSignals.take(3).joinToString(", ") { d ->

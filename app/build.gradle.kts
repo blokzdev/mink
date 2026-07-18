@@ -112,6 +112,9 @@ android {
 }
 
 dependencies {
+    implementation(project(":guardian-core"))
+    testImplementation(testFixtures(project(":guardian-core")))
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)

@@ -41,7 +41,7 @@ data class DnsFlowReport(
 internal const val IPPROTO_UDP = 17
 
 /** A parsed IPv4 + UDP datagram — only the fields the monitor needs. */
-internal class Ipv4Udp(
+class Ipv4Udp(
     val srcIp: ByteArray,
     val dstIp: ByteArray,
     val srcPort: Int,
@@ -54,7 +54,7 @@ internal class Ipv4Udp(
  * Parse an IPv4/UDP datagram, or null if [b] (of length [len]) is not one we
  * handle (IPv6, non-UDP, or truncated). Never throws.
  */
-internal fun parseIpv4Udp(b: ByteArray, len: Int): Ipv4Udp? {
+fun parseIpv4Udp(b: ByteArray, len: Int): Ipv4Udp? {
     if (len < 20) return null
     if ((b[0].toInt() and 0xF0) shr 4 != 4) return null           // IPv4 only
     val ihl = (b[0].toInt() and 0x0F) * 4
@@ -82,7 +82,7 @@ internal fun parseIpv4Udp(b: ByteArray, len: Int): Ipv4Udp? {
  * [dnsStart]. Returns "" if there is no readable name. Never throws. Compression
  * pointers are not expected in a query and end parsing.
  */
-internal fun parseDnsQuestionName(b: ByteArray, dnsStart: Int, len: Int): String {
+fun parseDnsQuestionName(b: ByteArray, dnsStart: Int, len: Int): String {
     var i = dnsStart + 12                                         // skip the 12-byte DNS header
     val sb = StringBuilder()
     while (i < len) {
@@ -109,7 +109,7 @@ internal fun parseDnsQuestionName(b: ByteArray, dnsStart: Int, len: Int): String
  * the UDP checksum is left 0, which is valid for IPv4 (RFC 768). Used to hand a
  * DNS *response* back to the app as though it came from the sentinel resolver.
  */
-internal fun buildIpv4UdpPacket(
+fun buildIpv4UdpPacket(
     srcIp: ByteArray,
     srcPort: Int,
     dstIp: ByteArray,

@@ -273,5 +273,5 @@ private fun unescapeRfc2253(value: String): String {
  * Read a surface, carrying [previousValue] forward on a THROW; a successful (even
  * empty) read replaces it. [empty] is used when there is no previous value.
  */
-internal inline fun <T> carrySurface(previousValue: T?, empty: T, read: () -> T): T =
+inline fun <T> carrySurface(previousValue: T?, empty: T, read: () -> T): T =
     runCatching(read).getOrElse { previousValue ?: empty }
