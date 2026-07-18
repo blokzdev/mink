@@ -14,11 +14,14 @@ import org.junit.Test
  * The bus's mechanics on virtual time: monotonic sequencing and clock stamping,
  * ordered per-hook delivery, and — the load-bearing properties — that a wedged
  * or throwing hook is fully isolated (its own tail dropped and counted, siblings
- * and the emitter untouched) and that a bus with no hooks is an inert no-op.
+ * untouched, per-hook drop accounting independent) and that a bus with no hooks
+ * is an inert no-op that never replays.
  *
- * Delivery tests run on an [UnconfinedTestDispatcher] so the fan-out collector
- * and per-hook consumers subscribe eagerly before the first emit (a lazy
- * dispatcher would miss the replay-0 stream).
+ * [emit] delivers to each hook's channel directly (no fan-out collector to
+ * subscribe), so there is no subscription race to hide. The delivery/isolation
+ * tests run on an [UnconfinedTestDispatcher] because that models the real
+ * behavior under scrutiny — each hook's consumer draining *concurrently* with
+ * the emitter — which a serialized dispatcher (emit-all-then-drain) could not.
  *
  * The controller-integration invariants the design also names for this PR
  * (persist-then-emit ordering, and `AlertRaised(immutable)` always followed by
@@ -31,6 +34,7 @@ import org.junit.Test
 class GuardianBusTest {
 
     private fun evt(id: String) = GuardianEvent.AlertNotified(id)
+    private fun idOf(e: GuardianEvent) = (e as GuardianEvent.AlertNotified).alertId
 
     // ---- sequencing + stamping (synchronous; dispatcher-independent) ----
 
@@ -62,13 +66,14 @@ class GuardianBusTest {
     // ---- delivery ----
 
     @Test
-    fun anAttachedHookReceivesEveryEventInOrder() = runTest(UnconfinedTestDispatcher()) {
+    fun anAttachedHookReceivesEveryEventInContiguousSeqOrder() = runTest(UnconfinedTestDispatcher()) {
         val bus = GuardianBus(backgroundScope)
         val received = mutableListOf<GuardianEvent>()
         bus.attach { received += it }
         repeat(5) { bus.emit(evt("a$it")) }
         advanceUntilIdle()
         assertEquals(5, received.size)
+        // Contiguous seqs are what makes gap-detection possible for a consumer.
         assertEquals(listOf(0L, 1L, 2L, 3L, 4L), received.map { it.seq })
     }
 
@@ -82,11 +87,10 @@ class GuardianBusTest {
         handle.detach()
         bus.emit(evt("after"))
         advanceUntilIdle()
-        assertEquals(1, received.size)
-        assertEquals("before", (received.single() as GuardianEvent.AlertNotified).alertId)
+        assertEquals(listOf("before"), received.map { idOf(it) })
     }
 
-    // ---- the zero-hook invariant ----
+    // ---- the zero-hook / no-replay invariant ----
 
     @Test
     fun aBusWithNoHooksIsAnInertNoOp() = runTest(UnconfinedTestDispatcher()) {
@@ -96,30 +100,44 @@ class GuardianBusTest {
         assertEquals("nothing is dropped when nothing is listening", 0L, bus.droppedCount)
     }
 
+    @Test
+    fun aHookAttachedAfterEmitsGetsNoBackfill() = runTest(UnconfinedTestDispatcher()) {
+        val bus = GuardianBus(backgroundScope)
+        repeat(5) { bus.emit(evt("early$it")) } // emitted before any hook exists
+        val received = mutableListOf<GuardianEvent>()
+        bus.attach { received += it }
+        bus.emit(evt("late"))
+        advanceUntilIdle()
+        // replay is 0: a late hook sees only what is emitted after it attaches.
+        assertEquals(listOf("late"), received.map { idOf(it) })
+    }
+
     // ---- isolation: a wedged hook ----
 
     @Test
-    fun aWedgedHookDropsItsOwnTailWithoutStarvingASibling() = runTest(UnconfinedTestDispatcher()) {
+    fun aWedgedHookDropsExactlyItsOwnTailWithIndependentAccounting() = runTest(UnconfinedTestDispatcher()) {
         val bus = GuardianBus(backgroundScope)
-        val gate = CompletableDeferred<Unit>() // never completed: wedges the hook
+        val gate = CompletableDeferred<Unit>() // never completed: wedges the hook on its first event
         val healthy = mutableListOf<GuardianEvent>()
         val wedged = bus.attach { gate.await() }
-        bus.attach { healthy += it }
+        val healthyHandle = bus.attach { healthy += it }
 
         repeat(300) { bus.emit(evt("e$it")) }
         advanceUntilIdle()
 
-        // The emitter never blocked (the test reached here) and the healthy hook
-        // saw everything, while the wedged hook's bounded channel shed its tail.
+        // The wedged hook consumed event 0 (then stuck), buffered the next 64
+        // (its capacity), and shed the remaining 235 — the tail, counted. Its
+        // sibling drained concurrently and saw all 300 with zero drops of its own.
         assertEquals(300, healthy.size)
-        assertTrue("the wedged hook should have dropped events", wedged.droppedCount > 0)
-        assertTrue("bus drop counter reflects it", bus.droppedCount > 0)
+        assertEquals("the wedged hook drops exactly its tail", 235L, wedged.droppedCount)
+        assertEquals("drop accounting is per hook", 0L, healthyHandle.droppedCount)
+        assertEquals("the bus total matches the one wedged hook", 235L, bus.droppedCount)
     }
 
     // ---- isolation: a throwing hook ----
 
     @Test
-    fun aThrowingHookIsCountedAndNeverAffectsASibling() = runTest(UnconfinedTestDispatcher()) {
+    fun aThrowingHookIsCountedPerEventAndNeverAffectsASibling() = runTest(UnconfinedTestDispatcher()) {
         val bus = GuardianBus(backgroundScope)
         val healthy = mutableListOf<GuardianEvent>()
         val thrower = bus.attach { error("boom") }
@@ -128,7 +146,10 @@ class GuardianBusTest {
         repeat(4) { bus.emit(evt("e$it")) }
         advanceUntilIdle()
 
-        assertEquals("every event reached the throwing hook and each threw", 4L, thrower.exceptionCount)
-        assertEquals("the sibling was untouched by the thrower", 4, healthy.size)
+        // Each event reached the throwing hook and threw, and its consumer kept
+        // going (4 catches, not 1) — the sibling was untouched throughout.
+        assertEquals(4L, thrower.exceptionCount)
+        assertEquals(0L, thrower.droppedCount)
+        assertEquals(4, healthy.size)
     }
 }

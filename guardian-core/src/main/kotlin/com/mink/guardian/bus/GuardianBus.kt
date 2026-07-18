@@ -29,18 +29,22 @@ fun interface GuardianHook {
  * StateFlow contents, and notification decisions — the permanent invariant its
  * tests pin.
  *
- * Dispatch never blocks the emitter. [emit] assigns the event a monotonic
- * [GuardianEvent.seq] and [GuardianEvent.atEpochMs] and `tryEmit`s into a
- * `MutableSharedFlow` (replay 0, 256-slot buffer, `DROP_OLDEST`) — so a burst
- * never suspends the sweep thread. A single fan-out collector forwards each
- * event to every attached hook's own bounded channel with a non-suspending
- * `trySend`; when a hook is wedged its channel fills and the newest events are
- * dropped (its own tail) and counted, never backpressuring the sweep or a
- * sibling. Hook exceptions are caught and counted per hook.
+ * Dispatch never blocks the emitter. [emit] stamps the event with a monotonic
+ * [GuardianEvent.seq] and [GuardianEvent.atEpochMs], `tryEmit`s it into the raw
+ * [events] `SharedFlow` (for any direct-stream consumer), and — for each attached
+ * hook — non-blockingly `trySend`s it straight into that hook's own bounded
+ * channel. Delivering from [emit] itself (rather than through a separately-
+ * subscribed fan-out collector) means there is no startup window in which an
+ * event could be lost before a collector subscribes: an event reaches exactly
+ * the hooks attached at emit time, and no others. When a hook is wedged its
+ * channel fills and the newest events are dropped (its own tail) and counted,
+ * never backpressuring the sweep or a sibling; a channel closed by a concurrent
+ * [HookHandle.detach] is skipped, not counted. Hook exceptions are caught and
+ * counted per hook.
  *
- * @param scope the coroutine scope the fan-out and per-hook consumers run in;
- *   cancelling it tears down all delivery. [emit] does not depend on the scope —
- *   it is a plain non-suspending call safe from the sweep thread.
+ * @param scope the coroutine scope each per-hook consumer runs in; cancelling it
+ *   tears down all delivery. [emit] does not depend on the scope — it is a plain
+ *   non-suspending call safe from the sweep thread.
  * @param clock supplies [GuardianEvent.atEpochMs]; injectable for tests.
  */
 class GuardianBus(
@@ -54,7 +58,7 @@ class GuardianBus(
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
 
-    /** The raw event stream. Prefer [attach] for isolated, per-hook delivery. */
+    /** The raw event stream for a direct-stream consumer. Prefer [attach] for isolated per-hook delivery. */
     val events: SharedFlow<GuardianEvent> = _events.asSharedFlow()
 
     private val seq = AtomicLong(0L)
@@ -65,33 +69,24 @@ class GuardianBus(
 
     private val hooks = CopyOnWriteArrayList<Registration>()
 
-    init {
-        // One fan-out collector: the sole subscriber to the shared flow, forwarding
-        // each event to every hook's private channel. With no hooks it is an inert
-        // no-op loop, so the bus stays advisory.
-        scope.launch {
-            _events.collect { event ->
-                for (reg in hooks) {
-                    // trySend never suspends: on a full channel it fails, dropping
-                    // this (newest) event for that hook and counting it — the sweep
-                    // and every other hook are untouched.
-                    if (reg.channel.trySend(event).isFailure) {
-                        reg.dropped.incrementAndGet()
-                        dropped.incrementAndGet()
-                    }
-                }
-            }
-        }
-    }
-
     /**
      * Publish a post-commit event. Non-suspending and safe from the sweep thread:
-     * it stamps the event and `tryEmit`s. Never throws.
+     * it stamps the event, offers it to the raw stream, and `trySend`s it to each
+     * attached hook. Never throws.
      */
     fun emit(event: GuardianEvent) {
         event.seq = seq.getAndIncrement()
         event.atEpochMs = clock()
         _events.tryEmit(event)
+        for (reg in hooks) {
+            val result = reg.channel.trySend(event)
+            // A full channel (wedged hook) drops this newest event and counts it;
+            // a channel closed by a racing detach is simply skipped, not counted.
+            if (result.isFailure && !result.isClosed) {
+                reg.dropped.incrementAndGet()
+                dropped.incrementAndGet()
+            }
+        }
     }
 
     /**

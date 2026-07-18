@@ -688,7 +688,12 @@ class GuardianController(
             generator.isLoaded,
             immutableAlert = alert.fromImmutableRule,
         )
-        if (mode != Mode.HYBRID) return null
+        if (mode != Mode.HYBRID) {
+            // A deterministic resolution still composes a surface (the caller uses
+            // the alert title); emit its receipt so every resolution is audited.
+            bus.emit(GuardianEvent.SurfaceComposed(Surface.COMPANION_REMARK, mode, Author.DETERMINISTIC))
+            return null
+        }
         val out = composer.compose(
             HybridSpec(
                 prompt = CompanionRemark.buildRemarkPrompt(alert),
@@ -714,7 +719,10 @@ class GuardianController(
      */
     override suspend fun narrate(prompt: String, facts: String): String? {
         val mode = ModeRouter.resolve(Surface.SUMMARY_NARRATION, capability.tier, generator.isLoaded)
-        if (mode != Mode.HYBRID) return null
+        if (mode != Mode.HYBRID) {
+            bus.emit(GuardianEvent.SurfaceComposed(Surface.SUMMARY_NARRATION, mode, Author.DETERMINISTIC))
+            return null
+        }
         val out = composer.compose(
             HybridSpec(
                 prompt = prompt,
