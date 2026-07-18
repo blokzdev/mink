@@ -15,6 +15,9 @@ import com.mink.guardian.compose.AgentEvent
 import com.mink.guardian.compose.AgentSpec
 import com.mink.guardian.compose.Author
 import com.mink.guardian.compose.FinalReply
+import com.mink.guardian.bus.GuardianBus
+import com.mink.guardian.bus.GuardianEvent
+import com.mink.guardian.bus.SweepTrigger
 import com.mink.guardian.compose.GroundedComposer
 import com.mink.guardian.compose.HybridSpec
 import com.mink.guardian.compose.SurfaceText
@@ -136,6 +139,27 @@ class GuardianController(
      */
     private val composer = GroundedComposer(generator)
 
+    /**
+     * The typed, post-commit, advisory event bus. Publishing happens only after
+     * the corresponding durable write / StateFlow update; the StateFlows stay
+     * canonical and no decision reads the bus. With no hook attached it is inert
+     * — the emits below are `tryEmit`s into a buffer nobody drains.
+     */
+    val bus = GuardianBus(scope)
+
+    /**
+     * Cumulative counts of fresh observations and alerts ever added, incremented
+     * where [SignalChanged]/[AlertRaised] are emitted. A sweep reads them before
+     * and after its body (both under [sweepMutex], so a sensor session can't race
+     * the diff) to report [GuardianEvent.SweepCompleted] counts.
+     */
+    private var totalObservationsAdded = 0L
+    private var totalFreshAlertsAdded = 0L
+
+    /** Last model status published to the bus, so [ModelStateChanged] fires only on change. */
+    @Volatile
+    private var lastModelStatus: ModelStatus? = null
+
     private val _state = MutableStateFlow(
         GuardianState(tier = capability.tier),
     )
@@ -200,6 +224,7 @@ class GuardianController(
         scope.launch {
             modelManager.state.collect { model ->
                 _state.update { it.copy(model = model) }
+                publishModelStatus(model.status)
             }
         }
 
@@ -264,7 +289,7 @@ class GuardianController(
         startService()
         scheduleSweeps()
         runCatching { sensorMonitor.start() }
-        sweepNow()
+        sweepNow(SweepTrigger.ENABLE)
     }
 
     override fun disable() {
@@ -292,9 +317,16 @@ class GuardianController(
         }
     }
 
-    override fun sweepNow() {
+    override fun sweepNow() = sweepNow(SweepTrigger.MANUAL)
+
+    private fun sweepNow(trigger: SweepTrigger) {
         scope.launch(Dispatchers.Default) {
             sweepMutex.withLock {
+                val sweepStartElapsed = android.os.SystemClock.elapsedRealtime()
+                bus.emit(GuardianEvent.SweepStarted(trigger))
+                val observationsAtStart = totalObservationsAdded
+                val freshAlertsAtStart = totalFreshAlertsAdded
+
                 // Wait for the init restore so the notification gate reads the
                 // persisted settings, not defaults. Bounded so a wedged restore
                 // can never stall sweeps; after the timeout the gate runs with
@@ -336,7 +368,9 @@ class GuardianController(
                 val updatedBaseline = (baseline ?: GuardianBaseline.empty(now))
                     .updated(snapshot, now, trust = assessment.trust, sweepTime = sweepTime)
                 runCatching { persistence.saveBaseline(updatedBaseline) }
-                _baseline.value = updatedBaseline.summary(now)
+                val baselineSummary = updatedBaseline.summary(now)
+                _baseline.value = baselineSummary
+                bus.emit(GuardianEvent.BaselineUpdated(baselineSummary))
 
                 // Slow loop: once every RefinerConfig.periodSweeps sweeps, fold the
                 // user's engagement (acknowledged alerts) into per-source cooldown
@@ -493,19 +527,33 @@ class GuardianController(
                             refinerState.cooldownMultiplier(alertSource(it)),
                         )
                     }
-                    .forEach { GuardianService.postAlertNotification(appContext, it) }
+                    .forEach {
+                        GuardianService.postAlertNotification(appContext, it)
+                        bus.emit(GuardianEvent.AlertNotified(it.id))
+                    }
+
+                bus.emit(
+                    GuardianEvent.SweepCompleted(
+                        newObservations = (totalObservationsAdded - observationsAtStart).toInt(),
+                        newAlerts = (totalFreshAlertsAdded - freshAlertsAtStart).toInt(),
+                        durationMs = android.os.SystemClock.elapsedRealtime() - sweepStartElapsed,
+                    ),
+                )
             }
         }
     }
 
     override fun acknowledgeAlert(id: String) {
         var updated: List<GuardianAlert> = emptyList()
+        var acknowledged = false
         _alerts.update { current ->
+            acknowledged = current.any { it.id == id && !it.acknowledged }
             current.map { if (it.id == id) it.copy(acknowledged = true) else it }
                 .also { updated = it }
         }
         recomputeCounts()
         scope.launch(Dispatchers.IO) { runCatching { persistence.saveAlerts(updated) } }
+        if (acknowledged) bus.emit(GuardianEvent.AlertAcknowledged(id))
     }
 
     override fun setAlertness(alertness: Alertness) {
@@ -544,8 +592,8 @@ class GuardianController(
         _chatLog.update { current -> (current + userMsg + reply).takeLast(MAX_HISTORY) }
 
         val snapshot = store.signals.value
-        val useLlm =
-            ModeRouter.resolve(Surface.CHAT, capability.tier, generator.isLoaded) == Mode.AGENT
+        val chatMode = ModeRouter.resolve(Surface.CHAT, capability.tier, generator.isLoaded)
+        val useLlm = chatMode == Mode.AGENT
 
         if (useLlm) {
             val thinking = capability.tier == GuardianTier.FULL
@@ -582,6 +630,7 @@ class GuardianController(
             // .content); lastEmitted tracks what the token stream has already
             // yielded so it emits only the newly-grown suffix.
             var lastEmitted = ""
+            var composedAuthor = Author.DETERMINISTIC
             composer.agent(spec).collect { event ->
                 when (event) {
                     is AgentEvent.Delta -> {
@@ -594,12 +643,17 @@ class GuardianController(
                     }
                     is AgentEvent.Final -> {
                         reply = reply.commit(event.reply)
+                        composedAuthor = when (event.reply) {
+                            is FinalReply.Grounded -> Author.MODEL_GROUNDED
+                            is FinalReply.Fallback -> Author.DETERMINISTIC
+                        }
                         // If nothing streamed (empty or think-only output), surface
                         // the final content so the caller's flow still yields a reply.
                         if (lastEmitted.isEmpty() && reply.content.isNotEmpty()) emit(reply.content)
                     }
                 }
             }
+            bus.emit(GuardianEvent.SurfaceComposed(Surface.CHAT, chatMode, composedAuthor))
         } else {
             val text = rules.answer(message, snapshot, _baseline.value)
             val words = text.split(" ")
@@ -612,6 +666,7 @@ class GuardianController(
                 emit(if (index == 0) word else " $word")
             }
             reply = reply.copy(streaming = false)
+            bus.emit(GuardianEvent.SurfaceComposed(Surface.CHAT, chatMode, Author.DETERMINISTIC))
         }
 
         updateMessage(reply)
@@ -634,7 +689,7 @@ class GuardianController(
             immutableAlert = alert.fromImmutableRule,
         )
         if (mode != Mode.HYBRID) return null
-        return composer.compose(
+        val out = composer.compose(
             HybridSpec(
                 prompt = CompanionRemark.buildRemarkPrompt(alert),
                 facts = GroundingCheck.factsOf(alert.title, alert.body),
@@ -643,7 +698,9 @@ class GuardianController(
                 budgetMs = REMARK_GEN_BUDGET_MS,
                 params = GenParams.noThink(maxTokens = CompanionRemark.REMARK_MAX_TOKENS),
             ),
-        ).modelTextOrNull()
+        )
+        bus.emit(GuardianEvent.SurfaceComposed(Surface.COMPANION_REMARK, mode, out.author))
+        return out.modelTextOrNull()
     }
 
     /**
@@ -658,7 +715,7 @@ class GuardianController(
     override suspend fun narrate(prompt: String, facts: String): String? {
         val mode = ModeRouter.resolve(Surface.SUMMARY_NARRATION, capability.tier, generator.isLoaded)
         if (mode != Mode.HYBRID) return null
-        return composer.compose(
+        val out = composer.compose(
             HybridSpec(
                 prompt = prompt,
                 // This surface's deterministic text (the report detail) lives with
@@ -671,7 +728,9 @@ class GuardianController(
                 budgetMs = NARRATION_GEN_BUDGET_MS,
                 params = GenParams.noThink(maxTokens = SummaryNarration.NARRATION_MAX_TOKENS),
             ),
-        ).modelTextOrNull()
+        )
+        bus.emit(GuardianEvent.SurfaceComposed(Surface.SUMMARY_NARRATION, mode, out.author))
+        return out.modelTextOrNull()
     }
 
     /**
@@ -725,6 +784,7 @@ class GuardianController(
                         )
                         if (allowed) {
                             GuardianService.postAlertNotification(appContext, alert)
+                            bus.emit(GuardianEvent.AlertNotified(alert.id))
                         }
                     }
                 }
@@ -739,6 +799,7 @@ class GuardianController(
             _state.update {
                 it.copy(model = it.model.copy(status = ModelStatus.LOADING))
             }
+            publishModelStatus(ModelStatus.LOADING)
             val ok = runCatching {
                 val nCtx = if (capability.tier == GuardianTier.MINIMAL) 1024 else 2048
                 llmEngine.load(file.absolutePath, nCtx = nCtx)
@@ -751,6 +812,20 @@ class GuardianController(
                     ),
                 )
             }
+            publishModelStatus(if (ok) ModelStatus.LOADED else ModelStatus.FAILED)
+        }
+    }
+
+    /**
+     * Emit [GuardianEvent.ModelStateChanged] only on an actual transition. Model
+     * status arrives from two paths — the model-manager state collector and the
+     * load flow — so the last-status guard de-dupes their overlap. Advisory-only:
+     * the deduped read is not required to be exact.
+     */
+    private fun publishModelStatus(status: ModelStatus) {
+        if (status != lastModelStatus) {
+            lastModelStatus = status
+            bus.emit(GuardianEvent.ModelStateChanged(status))
         }
     }
 
@@ -782,23 +857,30 @@ class GuardianController(
     private fun realignRuleAlertLevels(findings: List<RulesEngine.RuleFinding>) {
         val levelById = findings.associate { "rule.${it.key}" to it.level }
         var realigned: List<GuardianAlert>? = null
+        var changes: List<Triple<String, AlertLevel, AlertLevel>> = emptyList()
         _alerts.update { current ->
+            val captured = mutableListOf<Triple<String, AlertLevel, AlertLevel>>()
             var changed = false
             val next = current.map { alert ->
                 val level = levelById[alert.id]
                 if (level != null && level != alert.level) {
                     changed = true
+                    captured += Triple(alert.id, alert.level, level)
                     alert.copy(level = level)
                 } else {
                     alert
                 }
             }
+            changes = captured
             realigned = if (changed) next else null
             if (changed) next else current
         }
         val merged = realigned ?: return
         recomputeCounts()
         scope.launch(Dispatchers.IO) { runCatching { persistence.saveAlerts(merged) } }
+        // A realigned level is not a fresh alert, so it announces its own event —
+        // the companion keys re-announcements on (id, level) upgrades off this.
+        changes.forEach { (id, from, to) -> bus.emit(GuardianEvent.AlertLevelRealigned(id, from, to)) }
     }
 
     private fun snapshotOf(
@@ -818,14 +900,20 @@ class GuardianController(
         }
         recomputeCounts()
         scope.launch(Dispatchers.IO) { runCatching { persistence.saveObservations(merged) } }
+        // Post-commit receipts: the canonical StateFlow is updated and the save
+        // enqueued before the advisory bus hears about it.
+        totalObservationsAdded += list.size
+        list.forEach { bus.emit(GuardianEvent.SignalChanged(it.categoryId, it)) }
     }
 
     private fun addAlerts(list: List<GuardianAlert>) {
         if (list.isEmpty()) return
         var merged: List<GuardianAlert>? = null
+        var freshAlerts: List<GuardianAlert> = emptyList()
         _alerts.update { current ->
             val existingIds = current.map { it.id }.toHashSet()
             val fresh = list.filter { it.id !in existingIds }
+            freshAlerts = fresh
             if (fresh.isEmpty()) {
                 merged = null
                 current
@@ -836,6 +924,10 @@ class GuardianController(
         val persisted = merged ?: return
         recomputeCounts()
         scope.launch(Dispatchers.IO) { runCatching { persistence.saveAlerts(persisted) } }
+        // Post-commit: only genuinely fresh alerts are announced, and only once
+        // the StateFlow holds them. Source is derived, so no caller passes it.
+        totalFreshAlertsAdded += freshAlerts.size
+        freshAlerts.forEach { bus.emit(GuardianEvent.AlertRaised(it, alertSource(it))) }
     }
 
     private fun updateMessage(message: ChatMessage) {
