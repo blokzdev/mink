@@ -537,26 +537,35 @@ class GuardianController(
 
             val raw = StringBuilder()
             var lastVisible = ""
-            llmEngine.generate(prompt, params).collect { piece ->
-                raw.append(piece)
-                val parsed = MiniCpmChatFormat.parseReply(raw.toString())
-                reply = reply.copy(content = parsed.content, thinking = parsed.thinking)
-                updateMessage(reply)
-                if (parsed.content.length > lastVisible.length) {
-                    val delta = parsed.content.substring(lastVisible.length)
-                    lastVisible = parsed.content
-                    emit(delta)
+            // Bound the generation so a slow device can't stream forever; if the
+            // budget elapses mid-reply we stop and fall back to the deterministic
+            // answer below, replacing the partial draft (show-then-correct).
+            val completed = withTimeoutOrNull(CHAT_GEN_BUDGET_MS) {
+                llmEngine.generate(prompt, params).collect { piece ->
+                    raw.append(piece)
+                    val parsed = MiniCpmChatFormat.parseReply(raw.toString())
+                    reply = reply.copy(content = parsed.content, thinking = parsed.thinking)
+                    updateMessage(reply)
+                    if (parsed.content.length > lastVisible.length) {
+                        val delta = parsed.content.substring(lastVisible.length)
+                        lastVisible = parsed.content
+                        emit(delta)
+                    }
                 }
-            }
+            } != null
             val finalParsed = MiniCpmChatFormat.parseReply(raw.toString())
             // Grounding pass: chat ranges over the whole snapshot, so only numbers
             // are checked (a proper-noun check over hundreds of readings would be
             // low-value and false-positive-prone). A reply that cites a figure found
             // nowhere in the snapshot, the learned rhythm, or the user's own message
             // is a fabrication — fall back to the deterministic rules answer, the
-            // same fallback already used for empty output.
+            // same fallback already used for empty output. Unlike the remark and the
+            // read, chat streamed a provisional draft to the UI as it generated, so
+            // this is a show-then-correct: the updateMessage(reply) below rewrites the
+            // observed chatLog to finalContent, which is the authoritative record (the
+            // per-token deltas emitted upstream are advisory).
             val candidate = finalParsed.content
-            val finalContent = if (candidate.isBlank() ||
+            val finalContent = if (!completed || candidate.isBlank() ||
                 !GroundingCheck.isGrounded(candidate, chatGroundingFacts(snapshot, message), checkEntities = false)
             ) {
                 rules.answer(message, snapshot, _baseline.value)
@@ -600,7 +609,8 @@ class GuardianController(
      */
     override suspend fun composeRemark(alert: GuardianAlert): String? {
         if (capability.tier == GuardianTier.RULES_ONLY || !llmEngine.isLoaded) return null
-        return runCatching {
+        return withTimeoutOrNull(REMARK_GEN_BUDGET_MS) {
+          runCatching {
             val prompt = CompanionRemark.buildRemarkPrompt(alert)
             val raw = StringBuilder()
             llmEngine
@@ -617,7 +627,8 @@ class GuardianController(
                     checkEntities = true,
                 )
             if (grounded) remark else null
-        }.getOrElse { if (it is CancellationException) throw it else null }
+          }.getOrElse { if (it is CancellationException) throw it else null }
+        }
     }
 
     /**
@@ -630,7 +641,8 @@ class GuardianController(
      */
     override suspend fun narrate(prompt: String, facts: String): String? {
         if (capability.tier == GuardianTier.RULES_ONLY || !llmEngine.isLoaded) return null
-        return runCatching {
+        return withTimeoutOrNull(NARRATION_GEN_BUDGET_MS) {
+          runCatching {
             val raw = StringBuilder()
             llmEngine
                 .generate(prompt, GenParams.noThink(maxTokens = SummaryNarration.NARRATION_MAX_TOKENS))
@@ -640,10 +652,19 @@ class GuardianController(
             // (the same [facts] string) — its numbers and any named surface must
             // trace back to them. If it fabricated a figure or a name, reject it
             // whole; the caller falls back to the deterministic FingerprintNarrative.
+            // The read is several sentences of warm summary, so ordinary capitalised
+            // openers ("None", "Overall") are exempt (skipSentenceInitial) — its named
+            // entities all come from [facts], which the deterministic report also names.
             val grounded = read.isNotBlank() &&
-                GroundingCheck.isGrounded(read, GroundingCheck.factsOf(facts), checkEntities = true)
+                GroundingCheck.isGrounded(
+                    read,
+                    GroundingCheck.factsOf(facts),
+                    checkEntities = true,
+                    skipSentenceInitial = true,
+                )
             if (grounded) read else null
-        }.getOrElse { if (it is CancellationException) throw it else null }
+          }.getOrElse { if (it is CancellationException) throw it else null }
+        }
     }
 
     // ---- internals ----
@@ -892,5 +913,23 @@ class GuardianController(
         private const val COLLECT_SETTLE_TIMEOUT_MS = 5000L
         private const val COLLECT_SETTLE_POLL_MS = 40L
         private const val RESTORE_WAIT_MS = 2000L
+
+        // Wall-clock budgets for one model generation, after which the surface
+        // falls back to its deterministic text. On-device token throughput varies
+        // wildly by chip, so an unbounded generation is an unbounded spinner on a
+        // slow device; these bound it while leaving generous headroom for a normal
+        // mid-range phone (which finishes well under them). The fallback is the same
+        // deterministic text a fabrication or an empty reply drops to, so a budget
+        // that trips only degrades quietly. Tunable copy/latency budgets, not lane-5
+        // immutables. The companion remark is a background utterance (shortest
+        // budget); the read and chat are user-initiated (longer). Note the budget is
+        // enforced cooperatively — the timeout can only cancel between the engine's
+        // blocking native calls (each token, and the one-shot prompt prefill), so a
+        // single pathologically slow call can overrun it before the next check. On
+        // real hardware prefill is sub-second and tokens are quick, so in practice
+        // the budget bounds the dominant slow path (a long token stream).
+        private const val REMARK_GEN_BUDGET_MS = 20_000L
+        private const val NARRATION_GEN_BUDGET_MS = 40_000L
+        private const val CHAT_GEN_BUDGET_MS = 60_000L
     }
 }
