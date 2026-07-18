@@ -158,12 +158,15 @@ interface Guardian {
     /**
      * Compose a grounded plain-language read of the fingerprint summary from a
      * pre-built [prompt], using the on-device model, or null to fall back to the
-     * deterministic narrative. Never throws; returns null when no model is loaded.
-     * Defaulted so other [Guardian] implementers stay source-compatible;
-     * [GuardianController] overrides it. The model only writes the prose — the
-     * deterministic report stays the grounded backbone and the fallback.
+     * deterministic narrative. Never throws; returns null when no model is loaded
+     * OR when the read fails the grounding check. [facts] is the same grounded
+     * fact list the [prompt] was built from; the read's numbers and named surfaces
+     * must trace back to it, or it is rejected. Defaulted so other [Guardian]
+     * implementers stay source-compatible; [GuardianController] overrides it. The
+     * model only writes the prose — the deterministic report stays the grounded
+     * backbone and the fallback.
      */
-    suspend fun narrate(prompt: String): String? = null
+    suspend fun narrate(prompt: String, facts: String): String? = null
 
     fun acknowledgeAlert(id: String)
 

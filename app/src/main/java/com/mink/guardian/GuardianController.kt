@@ -549,7 +549,20 @@ class GuardianController(
                 }
             }
             val finalParsed = MiniCpmChatFormat.parseReply(raw.toString())
-            val finalContent = finalParsed.content.ifBlank { rules.answer(message, snapshot, _baseline.value) }
+            // Grounding pass: chat ranges over the whole snapshot, so only numbers
+            // are checked (a proper-noun check over hundreds of readings would be
+            // low-value and false-positive-prone). A reply that cites a figure found
+            // nowhere in the snapshot, the learned rhythm, or the user's own message
+            // is a fabrication — fall back to the deterministic rules answer, the
+            // same fallback already used for empty output.
+            val candidate = finalParsed.content
+            val finalContent = if (candidate.isBlank() ||
+                !GroundingCheck.isGrounded(candidate, chatGroundingFacts(snapshot, message), checkEntities = false)
+            ) {
+                rules.answer(message, snapshot, _baseline.value)
+            } else {
+                candidate
+            }
             reply = reply.copy(
                 content = finalContent,
                 thinking = finalParsed.thinking,
@@ -593,7 +606,17 @@ class GuardianController(
             llmEngine
                 .generate(prompt, GenParams.noThink(maxTokens = CompanionRemark.REMARK_MAX_TOKENS))
                 .collect { raw.append(it) }
-            CompanionRemark.postProcessRemark(raw.toString()).ifBlank { null }
+            val remark = CompanionRemark.postProcessRemark(raw.toString())
+            // Grounding pass: the remark may name only the app/setting in this
+            // alert and cite only its numbers; if the model invented anything else,
+            // reject it whole and let the caller fall back to the alert title.
+            val grounded = remark.isNotBlank() &&
+                GroundingCheck.isGrounded(
+                    remark,
+                    GroundingCheck.factsOf(alert.title, alert.body),
+                    checkEntities = true,
+                )
+            if (grounded) remark else null
         }.getOrElse { if (it is CancellationException) throw it else null }
     }
 
@@ -605,14 +628,21 @@ class GuardianController(
      * any failure or empty output degrades to the narrative. No chat-log
      * persistence — this is a side read, not a conversation turn.
      */
-    override suspend fun narrate(prompt: String): String? {
+    override suspend fun narrate(prompt: String, facts: String): String? {
         if (capability.tier == GuardianTier.RULES_ONLY || !llmEngine.isLoaded) return null
         return runCatching {
             val raw = StringBuilder()
             llmEngine
                 .generate(prompt, GenParams.noThink(maxTokens = SummaryNarration.NARRATION_MAX_TOKENS))
                 .collect { raw.append(it) }
-            SummaryNarration.postProcessNarration(raw.toString()).ifBlank { null }
+            val read = SummaryNarration.postProcessNarration(raw.toString())
+            // Grounding pass: the read may cite only the facts the model was given
+            // (the same [facts] string) — its numbers and any named surface must
+            // trace back to them. If it fabricated a figure or a name, reject it
+            // whole; the caller falls back to the deterministic FingerprintNarrative.
+            val grounded = read.isNotBlank() &&
+                GroundingCheck.isGrounded(read, GroundingCheck.factsOf(facts), checkEntities = true)
+            if (grounded) read else null
         }.getOrElse { if (it is CancellationException) throw it else null }
     }
 
@@ -813,6 +843,31 @@ class GuardianController(
                 request,
             )
         }
+    }
+
+    /**
+     * The ground truth a chat reply is checked against: every signal name and
+     * value the phone actually read, the learned-rhythm digest, and the user's
+     * own message (so echoing a figure they raised is grounded). Kept broad on
+     * purpose — a wide, real fact set is what keeps the numbers check from
+     * wrongly rejecting a genuinely grounded answer.
+     */
+    private fun chatGroundingFacts(
+        snapshot: Map<SignalCategory, List<FingerprintSignal>>,
+        message: String,
+    ): GroundingCheck.GroundingFacts {
+        val sources = buildList {
+            add(message)
+            _baseline.value?.let { add(rhythmDigest(it)) }
+            snapshot.values.forEach { signals ->
+                signals.forEach { signal ->
+                    add(signal.name)
+                    add(signal.value)
+                    signal.entries?.forEach { add(it.label); add(it.value) }
+                }
+            }
+        }
+        return GroundingCheck.factsOf(sources)
     }
 
     /** The guardian's persona. Same calm, on-device voice as the UI copy. */
