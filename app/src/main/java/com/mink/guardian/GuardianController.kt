@@ -11,7 +11,10 @@ import com.mink.core.model.FingerprintSignal
 import com.mink.core.model.SignalCategory
 import com.mink.data.LoadState
 import com.mink.data.SignalStore
+import com.mink.guardian.compose.AgentEvent
+import com.mink.guardian.compose.AgentSpec
 import com.mink.guardian.compose.Author
+import com.mink.guardian.compose.FinalReply
 import com.mink.guardian.compose.GroundedComposer
 import com.mink.guardian.compose.HybridSpec
 import com.mink.guardian.compose.SurfaceText
@@ -556,52 +559,46 @@ class GuardianController(
             val prompt = MiniCpmChatFormat.buildPrompt(systemPrompt(), turns, message, thinking)
             val params = if (thinking) GenParams.think() else GenParams.noThink()
 
-            val raw = StringBuilder()
-            var lastVisible = ""
-            // Bound the generation so a slow device can't stream forever; if the
-            // budget elapses mid-reply we stop and fall back to the deterministic
-            // answer below, replacing the partial draft (show-then-correct).
-            val completed = withTimeoutOrNull(CHAT_GEN_BUDGET_MS) {
-                generator.generate(prompt, params).collect { piece ->
-                    raw.append(piece)
-                    val parsed = MiniCpmChatFormat.parseReply(raw.toString())
-                    reply = reply.copy(content = parsed.content, thinking = parsed.thinking)
-                    updateMessage(reply)
-                    if (parsed.content.length > lastVisible.length) {
-                        val delta = parsed.content.substring(lastVisible.length)
-                        lastVisible = parsed.content
-                        emit(delta)
+            // The composer owns the budget, the reasoning/visible split, the
+            // numbers-only grounding, and the deterministic fallback. Chat ranges
+            // over the whole snapshot, so only cited figures are checked (a
+            // proper-noun check over hundreds of readings would be low-value and
+            // false-positive-prone). The fallback — the same deterministic rules
+            // answer empty output already drops to — is built up front; it is a
+            // pure query, so computing it eagerly is free of side effects.
+            val spec = AgentSpec(
+                prompt = prompt,
+                facts = chatGroundingFacts(snapshot, message),
+                fallback = rules.answer(message, snapshot, _baseline.value),
+                budgetMs = CHAT_GEN_BUDGET_MS,
+                params = params,
+            )
+
+            // Show-then-correct: Deltas stream the provisional draft to the UI and
+            // the observed chatLog; the single Final carries the authoritative
+            // reply (grounded prose or fallback) that becomes the committed record.
+            // Each Delta's visibleSoFar is the whole parsed reply so far, assigned
+            // straight onto the message (exactly the old reply.content = parsed
+            // .content); lastEmitted tracks what the token stream has already
+            // yielded so it emits only the newly-grown suffix.
+            var lastEmitted = ""
+            composer.agent(spec).collect { event ->
+                when (event) {
+                    is AgentEvent.Delta -> {
+                        reply = reply.copy(content = event.visibleSoFar, thinking = event.thinkingSoFar)
+                        updateMessage(reply)
+                        if (event.visibleSoFar.length > lastEmitted.length) {
+                            emit(event.visibleSoFar.substring(lastEmitted.length))
+                            lastEmitted = event.visibleSoFar
+                        }
+                    }
+                    is AgentEvent.Final -> {
+                        reply = reply.commit(event.reply)
+                        // If nothing streamed (empty or think-only output), surface
+                        // the final content so the caller's flow still yields a reply.
+                        if (lastEmitted.isEmpty() && reply.content.isNotEmpty()) emit(reply.content)
                     }
                 }
-            } != null
-            val finalParsed = MiniCpmChatFormat.parseReply(raw.toString())
-            // Grounding pass: chat ranges over the whole snapshot, so only numbers
-            // are checked (a proper-noun check over hundreds of readings would be
-            // low-value and false-positive-prone). A reply that cites a figure found
-            // nowhere in the snapshot, the learned rhythm, or the user's own message
-            // is a fabrication — fall back to the deterministic rules answer, the
-            // same fallback already used for empty output. Unlike the remark and the
-            // read, chat streamed a provisional draft to the UI as it generated, so
-            // this is a show-then-correct: the updateMessage(reply) below rewrites the
-            // observed chatLog to finalContent, which is the authoritative record (the
-            // per-token deltas emitted upstream are advisory).
-            val candidate = finalParsed.content
-            val finalContent = if (!completed || candidate.isBlank() ||
-                !GroundingCheck.isGrounded(candidate, chatGroundingFacts(snapshot, message), checkEntities = false)
-            ) {
-                rules.answer(message, snapshot, _baseline.value)
-            } else {
-                candidate
-            }
-            reply = reply.copy(
-                content = finalContent,
-                thinking = finalParsed.thinking,
-                streaming = false,
-            )
-            // If nothing streamed through (empty or think-only output), surface
-            // the final content so the caller's flow still yields a reply.
-            if (lastVisible.isEmpty() && finalContent.isNotEmpty()) {
-                emit(finalContent)
             }
         } else {
             val text = rules.answer(message, snapshot, _baseline.value)
@@ -843,6 +840,18 @@ class GuardianController(
 
     private fun updateMessage(message: ChatMessage) {
         _chatLog.update { log -> log.map { if (it.id == message.id) message else it } }
+    }
+
+    /**
+     * Fold a composer [FinalReply] into the committed reply message: this is the
+     * only way authoritative chat text is produced, so the persisted log can
+     * never hold model prose the grounding gate did not pass — an [AgentEvent]
+     * `Delta` (the advisory live draft) has no path here. Both arms end the
+     * stream (streaming = false).
+     */
+    private fun ChatMessage.commit(final: FinalReply): ChatMessage = when (final) {
+        is FinalReply.Grounded -> copy(content = final.prose.text, thinking = final.thinking, streaming = false)
+        is FinalReply.Fallback -> copy(content = final.text, thinking = final.thinking, streaming = false)
     }
 
     private fun recomputeCounts() {
