@@ -45,6 +45,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import com.mink.core.model.SignalCategory
 import com.mink.core.model.Sensitivity
+import com.mink.core.model.tint
 import com.mink.data.MinkServices
 import com.mink.ui.components.MinkIcons
 import com.mink.ui.components.TierChip

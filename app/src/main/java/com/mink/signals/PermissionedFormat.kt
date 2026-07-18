@@ -3,6 +3,7 @@ package com.mink.signals
 import com.mink.core.model.FingerprintSignal
 import com.mink.core.model.PermissionKind
 import com.mink.core.model.SignalCategory
+import com.mink.core.model.manifestPermissions
 import com.mink.core.provider.ProviderContext
 import java.math.BigDecimal
 import java.math.RoundingMode

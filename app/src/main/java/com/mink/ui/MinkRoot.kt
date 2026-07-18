@@ -21,6 +21,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.rememberNavController
 import com.mink.core.model.PermissionKind
 import com.mink.core.model.SignalCategory
+import com.mink.core.model.manifestPermissions
 import com.mink.data.MinkServices
 import com.mink.ui.nav.CompanionDeepLink
 import com.mink.ui.nav.LocalPermissionRequester
