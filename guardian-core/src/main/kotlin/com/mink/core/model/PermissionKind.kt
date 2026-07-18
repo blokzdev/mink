@@ -1,12 +1,10 @@
 package com.mink.core.model
 
-import android.Manifest
-import android.os.Build
-
 /**
  * The Android runtime permission gate a category has to pass before it can
- * produce any signals. Each kind carries the concrete manifest permission(s)
- * to request and the educational rationale shown on the permission gate.
+ * produce any signals. Each kind carries the educational rationale shown on
+ * the permission gate; the concrete manifest permission strings live in the
+ * app layer ([manifestPermissions] extension) so this model stays pure.
  */
 enum class PermissionKind {
     LOCATION,
@@ -34,56 +32,6 @@ enum class PermissionKind {
             PHYSICAL_ACTIVITY -> "Physical Activity"
             MICROPHONE -> "Microphone"
             NOTIFICATIONS -> "Notifications"
-        }
-
-    /**
-     * The manifest permission strings to request for this kind, resolved for
-     * the running OS version (media and nearby-device permissions were split
-     * out in newer Android releases).
-     */
-    val manifestPermissions: List<String>
-        get() = when (this) {
-            LOCATION -> listOf(
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION,
-            )
-            CAMERA -> listOf(Manifest.permission.CAMERA)
-            BLUETOOTH -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                listOf(
-                    Manifest.permission.BLUETOOTH_CONNECT,
-                    Manifest.permission.BLUETOOTH_SCAN,
-                )
-            } else {
-                listOf(Manifest.permission.ACCESS_FINE_LOCATION)
-            }
-            NEARBY_WIFI -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                listOf(Manifest.permission.NEARBY_WIFI_DEVICES)
-            } else {
-                listOf(Manifest.permission.ACCESS_FINE_LOCATION)
-            }
-            CONTACTS -> listOf(Manifest.permission.READ_CONTACTS)
-            CALENDAR -> listOf(Manifest.permission.READ_CALENDAR)
-            MEDIA_IMAGES -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                listOf(Manifest.permission.READ_MEDIA_IMAGES)
-            } else {
-                listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-            }
-            MEDIA_AUDIO -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                listOf(Manifest.permission.READ_MEDIA_AUDIO)
-            } else {
-                listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-            }
-            PHYSICAL_ACTIVITY -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                listOf(Manifest.permission.ACTIVITY_RECOGNITION)
-            } else {
-                emptyList()
-            }
-            MICROPHONE -> listOf(Manifest.permission.RECORD_AUDIO)
-            NOTIFICATIONS -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                listOf(Manifest.permission.POST_NOTIFICATIONS)
-            } else {
-                emptyList()
-            }
         }
 
     val rationale: String

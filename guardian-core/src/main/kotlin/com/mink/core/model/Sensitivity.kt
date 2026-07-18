@@ -1,7 +1,5 @@
 package com.mink.core.model
 
-import androidx.compose.ui.graphics.Color
-
 /**
  * Classification of how invasive a given fingerprinting signal is. Mirrors
  * Loupe's three-tier model: how much it costs an app to read the value.
@@ -47,12 +45,5 @@ enum class Sensitivity {
             PASSIVE -> "visibility"
             PERMISSIONED -> "shield_lock"
             ADVANCED -> "science"
-        }
-
-    val tint: Color
-        get() = when (this) {
-            PASSIVE -> Color(0xFF34C759)
-            PERMISSIONED -> Color(0xFFFF9500)
-            ADVANCED -> Color(0xFFFF2D95)
         }
 }

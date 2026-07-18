@@ -12,6 +12,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mink.core.model.Sensitivity
+import com.mink.core.model.tint
 
 /**
  * A small pill labelling a category's sensitivity tier, tinted with the tier's

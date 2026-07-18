@@ -2,19 +2,6 @@ package com.mink.companion
 
 import kotlinx.coroutines.flow.StateFlow
 
-/** The companion's emotional/animation state, driving which sprite frames play. */
-enum class CompanionMood {
-    IDLE,
-    HAPPY,
-    CURIOUS,
-    ALERT,
-    THINKING,
-    SLEEPING;
-
-    val label: String
-        get() = name.lowercase().replaceFirstChar { it.uppercase() }
-}
-
 /** A line the companion is currently speaking, shown in its bubble. */
 data class CompanionUtterance(
     val text: String,
