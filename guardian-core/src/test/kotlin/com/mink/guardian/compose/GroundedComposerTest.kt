@@ -84,7 +84,9 @@ class GroundedComposerTest {
 
     @Test
     fun aBudgetElapseMidStreamFallsBackDeterministically() = runTest {
-        // 100 tokens at 500ms each would need 50s; the budget allows 2s.
+        // The spec caps at REMARK_MAX_TOKENS (48), so the fake emits 48 of these
+        // 500ms tokens — ~24s of streaming, well past the 2s budget, so the
+        // budget trips mid-stream and the surface falls back.
         val fake = FakeTextGenerator(
             Behavior.Tokens(List(100) { "Weather " }, perTokenDelayMs = 500L),
         )
@@ -107,10 +109,11 @@ class GroundedComposerTest {
     @Test
     fun noDraftWithAnUnsupportedClaimEverReturnsModelGrounded() = runTest {
         val fabricated = listOf(
-            "Spotify can now use your camera.",          // fabricated app name
+            "Spotify can now use your camera.",          // fabricated app name (first-upper)
+            "iMessage read your codes.",                 // internal-caps fabrication (lowercase-initial)
             "Weather opened 37 apps.",                   // fabricated count
             "Weather sent 1.2GB overnight.",             // fabricated magnitude
-            "TikTok read your contacts.",                // internal-caps fabrication
+            "TikTok read your contacts.",                // fabricated app name (first-upper)
             "Weather used your camera 24 times.",        // grounded name, fabricated number
         )
         for (text in fabricated) {

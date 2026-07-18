@@ -44,17 +44,22 @@ class ArchitectureTest {
     }
 
     /**
-     * Only the composer's GenerationRunner runs the generator. Any other
-     * `.generate(` call in core would be a path for model text to bypass the
-     * grounding gate.
+     * Only the composer's GenerationRunner runs the generator. Any other call
+     * to the generator in core would be a path for model text to bypass the
+     * grounding gate. The pattern catches a member call (`x.generate(`), a
+     * receiver-scoped call (`with(gen){ generate(...) }`), a spaced call, and a
+     * method reference (`gen::generate`) — the ways a call could slip a bare
+     * `.generate(` substring scan. `generatedAtMs` and the KDoc `[generate]`
+     * do not match (no `(` follows). TextGenerator.kt declares the method.
      */
     @Test
     fun onlyTheComposersRunnerRunsTheGenerator() {
+        val callsGenerator = Regex("""\bgenerate\s*\(|::\s*generate\b""")
         for (file in mainSources()) {
-            if (file.name == "GroundedComposer.kt") continue
+            if (file.name == "GroundedComposer.kt" || file.name == "TextGenerator.kt") continue
             assertTrue(
-                "${file.path} calls .generate( — only the composer's runner may run the generator",
-                !file.readText().contains(".generate("),
+                "${file.path} references generate — only the composer's runner may run the generator",
+                !callsGenerator.containsMatchIn(file.readText()),
             )
         }
     }
@@ -66,8 +71,13 @@ class ArchitectureTest {
             if (file.name == "GroundedComposer.kt" || file.name == "TextGenerator.kt") continue
             assertTrue(
                 "${file.path} imports TextGenerator — only the composer may accept a generator",
-                // startsWith, not equals: an aliased import ("... as TG") must not slip past.
-                file.readLines().none { it.trim().startsWith("import com.mink.guardian.llm.TextGenerator") },
+                file.readLines().none {
+                    val line = it.trim()
+                    // startsWith, not equals: an aliased import ("... as TG") must not
+                    // slip past; the wildcard would pull the seam in silently.
+                    line.startsWith("import com.mink.guardian.llm.TextGenerator") ||
+                        line == "import com.mink.guardian.llm.*"
+                },
             )
         }
     }

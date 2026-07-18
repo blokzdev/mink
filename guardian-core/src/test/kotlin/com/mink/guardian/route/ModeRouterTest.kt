@@ -25,6 +25,21 @@ class ModeRouterTest {
         assertEquals(Mode.AGENT, ModeRouter.intrinsic(Surface.CHAT))
     }
 
+    /**
+     * The downgrade-only property test compares Mode ordinals, so the enum's
+     * declaration order (increasing model-fulness) IS the safety property. Pin
+     * it: a reorder that made e.g. AGENT.ordinal < HYBRID.ordinal would silently
+     * weaken that test into accepting a raise, invisible until a raising bug
+     * lands on top of it.
+     */
+    @Test
+    fun theModeOrderIsMonotoneInModelFulness() {
+        assertEquals(
+            listOf(Mode.NOTIFICATION, Mode.SCRIPT, Mode.HYBRID, Mode.AGENT),
+            Mode.values().toList(),
+        )
+    }
+
     @Test
     fun deterministicSurfacesResolveIntrinsicallyUnderEveryInput() {
         for (tier in tiers) for (loaded in bools) for (imm in bools) for (pref in prefs) {
@@ -106,16 +121,25 @@ class ModeRouterTest {
 
     @Test
     fun aDeterministicPreferenceLowersEveryModelSurfaceToScript() {
+        // Swept over tier x loaded, not pinned at one point: rule 4 is
+        // tier-independent, so a future edit that conditioned it on tier (letting
+        // model text through against an explicit deterministic preference — the
+        // catastrophic direction) would escape a single-point test yet still
+        // satisfy the downgrade-only property. At (RULES_ONLY, false) the ceiling
+        // already forces SCRIPT, so SCRIPT is the expected value across the sweep.
         for (surface in listOf(Surface.COMPANION_REMARK, Surface.SUMMARY_NARRATION, Surface.CHAT)) {
-            assertEquals(
-                Mode.SCRIPT,
-                ModeRouter.resolve(
-                    surface,
-                    GuardianTier.FULL,
-                    modelLoaded = true,
-                    preference = ModePreference.DETERMINISTIC,
-                ),
-            )
+            for (tier in tiers) for (loaded in bools) {
+                assertEquals(
+                    "resolve($surface, $tier, loaded=$loaded, DETERMINISTIC) should be SCRIPT",
+                    Mode.SCRIPT,
+                    ModeRouter.resolve(
+                        surface,
+                        tier,
+                        modelLoaded = loaded,
+                        preference = ModePreference.DETERMINISTIC,
+                    ),
+                )
+            }
         }
     }
 
