@@ -22,7 +22,15 @@ class MinkApplication : Application() {
             com.mink.guardian.GuardianController(ctx, store, scope)
         }
         ServiceWiring.companionFactory = { ctx, guardian, scope ->
-            com.mink.companion.CompanionController(ctx, guardian, scope)
+            // The event bus lives on the concrete guardian; the composition root
+            // knows the guardianFactory just built a GuardianController, so the
+            // cast is safe and keeps the Guardian interface free of the bus.
+            com.mink.companion.CompanionController(
+                ctx,
+                guardian,
+                (guardian as com.mink.guardian.GuardianController).bus,
+                scope,
+            )
         }
         services = ServiceWiring.build(this)
     }
