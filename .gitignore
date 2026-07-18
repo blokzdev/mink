@@ -21,6 +21,9 @@
 *.jks
 *.keystore
 
+# Claude Code — personal per-machine permissions; shared config (if any) is .claude/settings.json
+/.claude/settings.local.json
+
 # OS
 .DS_Store
 
