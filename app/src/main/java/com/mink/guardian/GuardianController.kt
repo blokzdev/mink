@@ -537,19 +537,41 @@ class GuardianController(
 
             val raw = StringBuilder()
             var lastVisible = ""
-            llmEngine.generate(prompt, params).collect { piece ->
-                raw.append(piece)
-                val parsed = MiniCpmChatFormat.parseReply(raw.toString())
-                reply = reply.copy(content = parsed.content, thinking = parsed.thinking)
-                updateMessage(reply)
-                if (parsed.content.length > lastVisible.length) {
-                    val delta = parsed.content.substring(lastVisible.length)
-                    lastVisible = parsed.content
-                    emit(delta)
+            // Bound the generation so a slow device can't stream forever; if the
+            // budget elapses mid-reply we stop and fall back to the deterministic
+            // answer below, replacing the partial draft (show-then-correct).
+            val completed = withTimeoutOrNull(CHAT_GEN_BUDGET_MS) {
+                llmEngine.generate(prompt, params).collect { piece ->
+                    raw.append(piece)
+                    val parsed = MiniCpmChatFormat.parseReply(raw.toString())
+                    reply = reply.copy(content = parsed.content, thinking = parsed.thinking)
+                    updateMessage(reply)
+                    if (parsed.content.length > lastVisible.length) {
+                        val delta = parsed.content.substring(lastVisible.length)
+                        lastVisible = parsed.content
+                        emit(delta)
+                    }
                 }
-            }
+            } != null
             val finalParsed = MiniCpmChatFormat.parseReply(raw.toString())
-            val finalContent = finalParsed.content.ifBlank { rules.answer(message, snapshot, _baseline.value) }
+            // Grounding pass: chat ranges over the whole snapshot, so only numbers
+            // are checked (a proper-noun check over hundreds of readings would be
+            // low-value and false-positive-prone). A reply that cites a figure found
+            // nowhere in the snapshot, the learned rhythm, or the user's own message
+            // is a fabrication — fall back to the deterministic rules answer, the
+            // same fallback already used for empty output. Unlike the remark and the
+            // read, chat streamed a provisional draft to the UI as it generated, so
+            // this is a show-then-correct: the updateMessage(reply) below rewrites the
+            // observed chatLog to finalContent, which is the authoritative record (the
+            // per-token deltas emitted upstream are advisory).
+            val candidate = finalParsed.content
+            val finalContent = if (!completed || candidate.isBlank() ||
+                !GroundingCheck.isGrounded(candidate, chatGroundingFacts(snapshot, message), checkEntities = false)
+            ) {
+                rules.answer(message, snapshot, _baseline.value)
+            } else {
+                candidate
+            }
             reply = reply.copy(
                 content = finalContent,
                 thinking = finalParsed.thinking,
@@ -587,14 +609,26 @@ class GuardianController(
      */
     override suspend fun composeRemark(alert: GuardianAlert): String? {
         if (capability.tier == GuardianTier.RULES_ONLY || !llmEngine.isLoaded) return null
-        return runCatching {
+        return withTimeoutOrNull(REMARK_GEN_BUDGET_MS) {
+          runCatching {
             val prompt = CompanionRemark.buildRemarkPrompt(alert)
             val raw = StringBuilder()
             llmEngine
                 .generate(prompt, GenParams.noThink(maxTokens = CompanionRemark.REMARK_MAX_TOKENS))
                 .collect { raw.append(it) }
-            CompanionRemark.postProcessRemark(raw.toString()).ifBlank { null }
-        }.getOrElse { if (it is CancellationException) throw it else null }
+            val remark = CompanionRemark.postProcessRemark(raw.toString())
+            // Grounding pass: the remark may name only the app/setting in this
+            // alert and cite only its numbers; if the model invented anything else,
+            // reject it whole and let the caller fall back to the alert title.
+            val grounded = remark.isNotBlank() &&
+                GroundingCheck.isGrounded(
+                    remark,
+                    GroundingCheck.factsOf(alert.title, alert.body),
+                    checkEntities = true,
+                )
+            if (grounded) remark else null
+          }.getOrElse { if (it is CancellationException) throw it else null }
+        }
     }
 
     /**
@@ -605,15 +639,27 @@ class GuardianController(
      * any failure or empty output degrades to the narrative. No chat-log
      * persistence — this is a side read, not a conversation turn.
      */
-    override suspend fun narrate(prompt: String): String? {
+    override suspend fun narrate(prompt: String, facts: String): String? {
         if (capability.tier == GuardianTier.RULES_ONLY || !llmEngine.isLoaded) return null
-        return runCatching {
+        return withTimeoutOrNull(NARRATION_GEN_BUDGET_MS) {
+          runCatching {
             val raw = StringBuilder()
             llmEngine
                 .generate(prompt, GenParams.noThink(maxTokens = SummaryNarration.NARRATION_MAX_TOKENS))
                 .collect { raw.append(it) }
-            SummaryNarration.postProcessNarration(raw.toString()).ifBlank { null }
-        }.getOrElse { if (it is CancellationException) throw it else null }
+            val read = SummaryNarration.postProcessNarration(raw.toString())
+            // Grounding pass: the read may cite only the facts the model was given
+            // (the same [facts] string) — its numbers and any named surface must
+            // trace back to them. If it fabricated a figure or a name, reject it
+            // whole; the caller falls back to the deterministic FingerprintNarrative.
+            // Ordinary capitalised openers a warm summary uses ("None", "Overall")
+            // are handled by GroundingCheck's stoplist, so a fabricated name that
+            // opens a sentence is still caught rather than exempted by position.
+            val grounded = read.isNotBlank() &&
+                GroundingCheck.isGrounded(read, GroundingCheck.factsOf(facts), checkEntities = true)
+            if (grounded) read else null
+          }.getOrElse { if (it is CancellationException) throw it else null }
+        }
     }
 
     // ---- internals ----
@@ -815,6 +861,31 @@ class GuardianController(
         }
     }
 
+    /**
+     * The ground truth a chat reply is checked against: every signal name and
+     * value the phone actually read, the learned-rhythm digest, and the user's
+     * own message (so echoing a figure they raised is grounded). Kept broad on
+     * purpose — a wide, real fact set is what keeps the numbers check from
+     * wrongly rejecting a genuinely grounded answer.
+     */
+    private fun chatGroundingFacts(
+        snapshot: Map<SignalCategory, List<FingerprintSignal>>,
+        message: String,
+    ): GroundingCheck.GroundingFacts {
+        val sources = buildList {
+            add(message)
+            _baseline.value?.let { add(rhythmDigest(it)) }
+            snapshot.values.forEach { signals ->
+                signals.forEach { signal ->
+                    add(signal.name)
+                    add(signal.value)
+                    signal.entries?.forEach { add(it.label); add(it.value) }
+                }
+            }
+        }
+        return GroundingCheck.factsOf(sources)
+    }
+
     /** The guardian's persona. Same calm, on-device voice as the UI copy. */
     private fun systemPrompt(): String {
         val persona =
@@ -837,5 +908,27 @@ class GuardianController(
         private const val COLLECT_SETTLE_TIMEOUT_MS = 5000L
         private const val COLLECT_SETTLE_POLL_MS = 40L
         private const val RESTORE_WAIT_MS = 2000L
+
+        // Wall-clock budgets for one model generation, after which the surface
+        // falls back to its deterministic text. On-device token throughput varies
+        // wildly by chip, so an unbounded generation is an unbounded spinner on a
+        // slow device; these bound it while leaving generous headroom for a normal
+        // mid-range phone (which finishes well under them). The fallback is the same
+        // deterministic text a fabrication or an empty reply drops to, so a budget
+        // that trips only degrades quietly. Tunable copy/latency budgets, not lane-5
+        // immutables. The companion remark is a background utterance (shortest
+        // budget); the read and chat are user-initiated (longer). Two honest bounds:
+        // (1) the budget covers the wait for the engine's generation mutex plus the
+        // generation itself, so a surface contending for a busy engine can time out
+        // to its fallback having produced nothing — benign, since the fallback is the
+        // deterministic text either way. (2) Enforcement is cooperative — the timeout
+        // can only cancel between the engine's blocking native calls (each token, and
+        // the one-shot prompt prefill), so a single pathologically slow call can
+        // overrun it before the next check. On real hardware prefill is sub-second
+        // and tokens are quick, so in practice the budget bounds the dominant slow
+        // path (a long token stream).
+        private const val REMARK_GEN_BUDGET_MS = 20_000L
+        private const val NARRATION_GEN_BUDGET_MS = 40_000L
+        private const val CHAT_GEN_BUDGET_MS = 60_000L
     }
 }

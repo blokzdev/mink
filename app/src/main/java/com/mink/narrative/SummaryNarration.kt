@@ -25,9 +25,12 @@ object SummaryNarration {
 
     /**
      * How many tokens the model may spend on one read. Tunable latency budget,
-     * not a lane-5 immutable — a few grounded sentences need no more.
+     * not a lane-5 immutable. Sized to the [NARRATION_MAX_CHARS] display cap:
+     * ~420 characters is only ~110-120 tokens of English, so anything past this
+     * would be generated only to be trimmed away — wasted latency on a slow
+     * device. A few grounded sentences fit comfortably inside it.
      */
-    const val NARRATION_MAX_TOKENS = 180
+    const val NARRATION_MAX_TOKENS = 128
 
     /**
      * Build the compact, grounded fact list handed to the model, one item per

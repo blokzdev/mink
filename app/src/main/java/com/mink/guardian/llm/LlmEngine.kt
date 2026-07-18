@@ -104,16 +104,22 @@ class LlmEngine {
             if (handle == 0L || !LlamaBridge.isAvailable) return@withLock
             val primed = runCatching { LlamaBridge.nativePrompt(handle, prompt) }.getOrDefault(-1)
             if (primed < 0) return@withLock
-            var emitted = 0
-            while (emitted < params.maxTokens && currentCoroutineContext().isActive) {
-                val piece = runCatching {
-                    LlamaBridge.nativeSampleToken(handle, params.temperature, params.topP)
-                }.getOrDefault("")
-                if (piece.isEmpty()) break
-                emit(piece)
-                emitted++
+            try {
+                var emitted = 0
+                while (emitted < params.maxTokens && currentCoroutineContext().isActive) {
+                    val piece = runCatching {
+                        LlamaBridge.nativeSampleToken(handle, params.temperature, params.topP)
+                    }.getOrDefault("")
+                    if (piece.isEmpty()) break
+                    emit(piece)
+                    emitted++
+                }
+            } finally {
+                // Reset in a finally so a collector that cancels or times out
+                // mid-stream (a caller's generation budget elapsing) still leaves a
+                // clean context for the next generation rather than a half-primed one.
+                runCatching { LlamaBridge.nativeResetContext(handle) }
             }
-            runCatching { LlamaBridge.nativeResetContext(handle) }
         }
     }.flowOn(dispatcher)
 

@@ -260,6 +260,7 @@ private fun MinkReadSection(
                             appScope.launch {
                                 val text = guardian.narrate(
                                     SummaryNarration.buildNarrationPrompt(report, story),
+                                    SummaryNarration.buildNarrationFacts(report, story),
                                 )
                                 narration = text ?: report.detail
                                 loading = false
