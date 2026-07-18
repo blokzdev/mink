@@ -70,24 +70,29 @@ class CompanionAlertRouter {
      */
     fun onEvent(event: GuardianEvent, board: List<GuardianAlert>): List<GuardianAlert>? {
         // Gap detection first, on EVERY event: seq is one global counter, so a jump
-        // means the consumer dropped events. Resync from the canonical board and
-        // stay silent rather than risk double-speaking a redelivered alert.
-        if (lastSeq >= 0 && event.seq > lastSeq + 1) {
+        // means the consumer dropped events. `maxOf` anchors lastSeq monotonically
+        // so a merely out-of-order delivery (concurrent emitters race between
+        // stamping and sending) cannot regress it and manufacture a false gap on
+        // the next event.
+        val gap = lastSeq >= 0 && event.seq > lastSeq + 1
+        lastSeq = maxOf(lastSeq, event.seq)
+        if (gap) {
+            // Resync from the canonical board — dropped alerts are post-commit on it,
+            // so absorbing them as seen is a silent catch-up that avoids double-speak.
+            // Then fall through and STILL process the triggering event, so a gap that
+            // lands on a SweepStarted still opens the bracket; inSweep is left as-is
+            // so a mid-sweep gap keeps batching the rest of the sweep.
             board.forEach { announced += key(it.id, it.level) }
             pending.clear()
-            inSweep = false
-            lastSeq = event.seq
-            return null
         }
-        lastSeq = event.seq
 
         return when (event) {
             is GuardianEvent.SweepStarted -> {
                 // Normally pending is empty here — the prior sweep flushed on its
                 // SweepCompleted. If a sweep aborted before completing, flush its
                 // stranded batch now (spoken late) rather than lose it, then open
-                // the new bracket. This is what keeps a rare aborted sweep from
-                // silently swallowing its findings or a sensor alert.
+                // the new bracket. This keeps a rare aborted sweep from silently
+                // swallowing its findings or a sensor alert.
                 val stranded = pending.toList()
                 pending.clear()
                 inSweep = true
@@ -100,8 +105,11 @@ class CompanionAlertRouter {
                 batch.ifEmpty { null }
             }
             is GuardianEvent.AlertRaised -> {
-                announced += key(event.alert.id, event.alert.level)
+                val k = key(event.alert.id, event.alert.level)
+                val fresh = k !in announced
+                announced += k
                 when {
+                    !fresh -> null                            // already reacted to this id at this level
                     !isSpeakable(event.alert.level) -> null   // seen, but never voiced
                     inSweep -> { pending += event.alert; null } // batch it
                     else -> listOf(event.alert)                // a sensor session: react now
@@ -113,6 +121,20 @@ class CompanionAlertRouter {
             else -> null
         }
     }
+
+    /**
+     * The richest alert of [alerts] — highest severity (critical over warning),
+     * then longest body, then newest — used by the companion to pick the mood and
+     * matching the speech policy's burst-merge so the animated mood and the voiced
+     * line agree. Pure, so it lives here on the tested side rather than in the
+     * Android controller. Null when [alerts] is empty.
+     */
+    fun richestOf(alerts: List<GuardianAlert>): GuardianAlert? =
+        alerts.maxWithOrNull(
+            compareBy<GuardianAlert> { if (it.level == AlertLevel.CRITICAL) 1 else 0 }
+                .thenBy { it.body.length }
+                .thenBy { it.createdAtEpochMs },
+        )
 
     /**
      * An alert was re-graded. Re-announce only an upward re-grade to a level not

@@ -8,7 +8,6 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.preferencesDataStore
-import com.mink.guardian.AlertLevel
 import com.mink.guardian.Guardian
 import com.mink.guardian.GuardianAlert
 import com.mink.guardian.bus.GuardianBus
@@ -94,7 +93,7 @@ class CompanionController(
      * the router returns null when there is nothing to react to.
      */
     private fun react(fresh: List<GuardianAlert>, nowMs: Long) {
-        val richest = richestAlert(fresh) ?: return
+        val richest = router.richestOf(fresh) ?: return
         // Rules pick the mood; the sprite animates for every fresh finding and the
         // quiet-timer restarts. Speech is gated separately, so the sprite stays
         // lively while the voice is rare.
@@ -201,19 +200,6 @@ class CompanionController(
             }
         }
     }
-
-    /**
-     * The richest of [alerts]: highest severity (critical over warning),
-     * tie-broken by the longest body then the newest finding, matching the
-     * speech policy's burst-merge so the mood and the voiced line agree. Null
-     * when there is nothing fresh to react to.
-     */
-    private fun richestAlert(alerts: List<GuardianAlert>): GuardianAlert? =
-        alerts.maxWithOrNull(
-            compareBy<GuardianAlert> { if (it.level == AlertLevel.CRITICAL) 1 else 0 }
-                .thenBy { it.body.length }
-                .thenBy { it.createdAtEpochMs },
-        )
 
     private companion object {
         const val BUBBLE_VISIBLE_MS = 9_000L
